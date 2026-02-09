@@ -46,5 +46,14 @@ if (-not $env:PARKING_API_KEY) {
 if (-not $env:PARKING_SECRET_KEY) {
     $env:PARKING_SECRET_KEY = "change-this-secret"
 }
+if (-not $env:PARKING_CONTEXT_SECRET) {
+    $env:PARKING_CONTEXT_SECRET = $env:PARKING_SECRET_KEY
+}
+if (-not $env:PARKING_LOCAL_LOGIN_ENABLED) {
+    $env:PARKING_LOCAL_LOGIN_ENABLED = "0"
+}
+if (-not $env:PARKING_CONTEXT_MAX_AGE) {
+    $env:PARKING_CONTEXT_MAX_AGE = "300"
+}
 
 & $python -m uvicorn app.main:app --host $ListenHost --port $Port --proxy-headers --forwarded-allow-ips "127.0.0.1"

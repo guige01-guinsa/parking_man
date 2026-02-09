@@ -48,6 +48,11 @@ if (-not (Test-Path $envFilePath)) {
         "PARKING_DB_PATH=./app/data/parking.db"
         "PARKING_UPLOAD_DIR=./app/uploads"
         "PARKING_ROOT_PATH=/parking"
+        "PARKING_DEFAULT_SITE_CODE=COMMON"
+        "PARKING_CONTEXT_SECRET=$(New-RandomBase64 -Bytes 48)"
+        "PARKING_CONTEXT_MAX_AGE=300"
+        "PARKING_LOCAL_LOGIN_ENABLED=0"
+        "PARKING_PORTAL_URL=https://www.ka-part.com/pwa/"
     ) | Set-Content -Path $envFilePath -Encoding UTF8
 }
 $runScript = Join-Path $backendDir "run.ps1"

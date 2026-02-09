@@ -14,3 +14,10 @@ Parking enforcement backend designed to run independently and integrate into a f
 Documentation:
 - `docs/DEPLOYMENT.md`
 - `docs/OPS.md`
+
+SSO integration (ka-part):
+- Entry endpoint: `/sso?ctx=<signed-token>`
+- Shared claims: `site_code`, `permission_level`
+- For integrated production use, set:
+  - `PARKING_LOCAL_LOGIN_ENABLED=0`
+  - `PARKING_CONTEXT_SECRET` (must match ka-part)

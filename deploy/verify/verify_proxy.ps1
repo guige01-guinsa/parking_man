@@ -28,8 +28,8 @@ $plateOk = Invoke-RestMethod -Method Get -Uri "$BaseUrl/api/plates/check?plate=1
 Assert-Equal -Expected "OK" -Actual $plateOk.verdict -Message "plate check failed through proxy"
 
 $login = Invoke-WebRequest -Method Get -Uri "$BaseUrl/login" -UseBasicParsing
-if ($login.Content -notmatch "action='/parking/login'") {
-    throw "login form action is not prefix-aware: expected /parking/login"
+if (($login.Content -notmatch "action='/parking/login'") -and ($login.Content -notmatch "통합 로그인 전용")) {
+    throw "unexpected login page content"
 }
 
 Write-Host "Proxy verification passed for $BaseUrl"

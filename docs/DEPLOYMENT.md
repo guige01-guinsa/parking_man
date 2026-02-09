@@ -6,11 +6,14 @@ This project is prepared to run as an independent service and be exposed under `
 
 1. Copy env template and set secure values:
    - `copy backend\.env.production.example backend\.env.production`
-   - Replace `PARKING_SECRET_KEY` and `PARKING_API_KEY`.
+   - Replace `PARKING_SECRET_KEY`, `PARKING_API_KEY`, `PARKING_CONTEXT_SECRET`.
+   - If integrated with ka-part: set `PARKING_LOCAL_LOGIN_ENABLED=0`.
 2. Start backend:
    - `pwsh -File backend\run.ps1`
 3. Direct health check:
    - `http://127.0.0.1:8011/health`
+4. SSO check (integration mode):
+   - `http://127.0.0.1:8011/sso?ctx=<signed-token>`
 
 ## 2. Nginx reverse proxy (Windows local)
 
@@ -18,7 +21,8 @@ This project is prepared to run as an independent service and be exposed under `
    - `pwsh -File deploy\windows\start_stack.ps1`
    - If `backend/.env.production` does not exist, the script creates one with random keys.
 2. Access:
-   - `http://127.0.0.1:8080/parking/login`
+   - `http://127.0.0.1:8080/parking/login` (standalone login mode)
+   - `http://127.0.0.1:8080/parking/admin2` (SSO session after `/sso`)
 3. Verify proxy:
    - `pwsh -File deploy\verify\verify_proxy.ps1 -ApiKey "<your api key>"`
 4. Stop stack:
