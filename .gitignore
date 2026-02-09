@@ -7,6 +7,12 @@ deploy/pids/
 tools/
 incoming_zip/
 __pycache__/
-*.pyc
+*.py[cod]
+*.log
 .env
 backend/.env.production
+env/
+venv/
+ENV/
+.pytest_cache/
+.mypy_cache/

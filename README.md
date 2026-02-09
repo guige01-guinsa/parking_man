@@ -2,7 +2,7 @@
 
 Parking enforcement backend designed to run independently and integrate into a facility management system.
 
-## Quick start
+## Quick Start
 
 1. Copy env template:
    - `copy backend\.env.production.example backend\.env.production`
