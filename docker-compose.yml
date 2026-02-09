@@ -1,0 +1,29 @@
+services:
+  parking-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: parking-api
+    env_file:
+      - ./backend/.env.production
+    volumes:
+      - parking_data:/data
+      - parking_uploads:/uploads
+    expose:
+      - "8011"
+    restart: unless-stopped
+
+  parking-nginx:
+    image: nginx:1.28-alpine
+    container_name: parking-nginx
+    depends_on:
+      - parking-api
+    ports:
+      - "8080:80"
+    volumes:
+      - ./deploy/nginx/docker-nginx.conf:/etc/nginx/nginx.conf:ro
+    restart: unless-stopped
+
+volumes:
+  parking_data:
+  parking_uploads:

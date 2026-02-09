@@ -1,0 +1,12 @@
+.venv/
+backend/.venv/
+backend/app/data/
+backend/app/uploads/
+backend/logs/
+deploy/pids/
+tools/
+incoming_zip/
+__pycache__/
+*.pyc
+.env
+backend/.env.production
