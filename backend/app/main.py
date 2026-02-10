@@ -7,7 +7,7 @@ import uuid
 import html as _html
 
 from fastapi import FastAPI, Header, HTTPException, UploadFile, File, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional, Literal
@@ -107,6 +107,24 @@ def today_iso() -> str:
 @app.get("/health")
 def health():
     return {"ok": True}
+
+@app.get("/", include_in_schema=False)
+def root():
+    # Render 기본 헬스/브라우저 접근 시 404를 내지 않도록 루트 엔트리 제공
+    if LOCAL_LOGIN_ENABLED:
+        return RedirectResponse(url=app_url("/login"), status_code=302)
+    return integration_required_page(status_code=200)
+
+@app.head("/", include_in_schema=False)
+def root_head():
+    if LOCAL_LOGIN_ENABLED:
+        return Response(status_code=302, headers={"Location": app_url("/login")})
+    return Response(status_code=200)
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    # favicon 미제공 시 잦은 404 로그를 피하기 위해 204 응답
+    return Response(status_code=204)
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page():
