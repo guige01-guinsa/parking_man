@@ -77,3 +77,17 @@ Files:
 Persist and back up:
 - DB: `backend/app/data/parking.db` (or Docker volume `parking_data`)
 - Uploads: `backend/app/uploads/` (or Docker volume `parking_uploads`)
+
+## 7. Render deployment
+
+Recommended settings:
+
+1. Root Directory: `backend`
+2. Build Command: `pip install -r requirements.txt`
+3. Start Command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+
+For full Render environment variable order, see:
+- `docs/RENDER_ENV_CHECKLIST.md`
+
+To generate strong random values for Render variables:
+- `pwsh -File deploy\render\generate_render_env.ps1`

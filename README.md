@@ -14,6 +14,7 @@ Parking enforcement backend designed to run independently and integrate into a f
 Documentation:
 - `docs/DEPLOYMENT.md`
 - `docs/OPS.md`
+- `docs/RENDER_ENV_CHECKLIST.md`
 
 SSO integration (ka-part):
 - Entry endpoint: `/sso?ctx=<signed-token>`
