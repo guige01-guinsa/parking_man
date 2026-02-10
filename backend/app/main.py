@@ -1,4 +1,5 @@
 import os
+import json
 from datetime import date
 from pathlib import Path
 import uuid
@@ -64,13 +65,20 @@ def resolve_site_scope(request: Request, x_site_code: str | None = None) -> str:
     return DEFAULT_SITE_CODE
 
 
+def portal_login_url() -> str:
+    return PORTAL_URL or ""
+
+
 def integration_required_page(status_code: int = 200) -> HTMLResponse:
+    target = portal_login_url()
+    target_js = json.dumps(target, ensure_ascii=False)
     link = (
-        f"""<p><a href="{_html.escape(PORTAL_URL)}">아파트 시설관리 시스템으로 이동</a></p>"""
-        if PORTAL_URL
+        f"""<p><a href="{_html.escape(target)}">아파트 시설관리 시스템으로 이동</a></p>"""
+        if target
         else "<p>아파트 시설관리 시스템의 '주차관리' 메뉴를 통해 접속하세요.</p>"
     )
-    body = f"<h2>Parking Login</h2><p>통합 로그인 전용입니다.</p>{link}"
+    auto = f"<script>window.location.replace({target_js});</script>" if target else ""
+    body = f"<h2>Parking Login</h2><p>통합 로그인 전용입니다.</p>{link}{auto}"
     return HTMLResponse(body, status_code=status_code)
 
 @app.on_event("startup")
