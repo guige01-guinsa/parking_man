@@ -117,8 +117,14 @@ def sso_login(ctx: str):
     except BadSignature as exc:
         raise HTTPException(status_code=401, detail="Invalid context token") from exc
 
-    site_code = normalize_site_code(payload.get("site_code"))
+    raw_site_code = str(payload.get("site_code") or "").strip()
+    if not raw_site_code:
+        raise HTTPException(status_code=400, detail="Context token missing site_code")
+    site_code = normalize_site_code(raw_site_code)
+
     permission_level = str(payload.get("permission_level") or "").strip().lower()
+    if not permission_level:
+        raise HTTPException(status_code=400, detail="Context token missing permission_level")
     role = map_permission_to_role(permission_level)
     token = make_session("ka-part-user", role, site_code=site_code)
     resp = RedirectResponse(url=app_url("/admin2"), status_code=302)
