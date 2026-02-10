@@ -53,6 +53,7 @@ if (-not (Test-Path $envFilePath)) {
         "PARKING_CONTEXT_MAX_AGE=300"
         "PARKING_LOCAL_LOGIN_ENABLED=0"
         "PARKING_PORTAL_URL=https://www.ka-part.com/pwa/"
+        "PARKING_PORTAL_LOGIN_URL=https://www.ka-part.com/pwa/login.html?next=%2Fparking%2Fadmin2"
     ) | Set-Content -Path $envFilePath -Encoding UTF8
 }
 $runScript = Join-Path $backendDir "run.ps1"

@@ -30,6 +30,7 @@ Environment variables input order:
 7. `PARKING_PORTAL_URL=https://www.ka-part.com/pwa/`
 8. `PARKING_ROOT_PATH=`
 9. `PARKING_SESSION_MAX_AGE=43200`
+10. `PARKING_PORTAL_LOGIN_URL=https://www.ka-part.com/pwa/login.html?next=%2Fparking%2Fadmin2`
 
 `PARKING_ROOT_PATH` rules:
 
