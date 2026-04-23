@@ -28,6 +28,8 @@ IMPORT_DIR = Path(os.getenv("PARKING_IMPORT_DIR", str(BASE_DIR.parent / "imports
 APP_TITLE = os.getenv("PARKING_APP_TITLE", "아파트 주차단속 시스템")
 ROOT_PATH = os.getenv("PARKING_ROOT_PATH", "").strip()
 LOCAL_LOGIN_ENABLED = os.getenv("PARKING_LOCAL_LOGIN_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+SUPPORT_KAKAO_URL = os.getenv("PARKING_SUPPORT_KAKAO_URL", "").strip()
+SUPPORT_KAKAO_LABEL = os.getenv("PARKING_SUPPORT_KAKAO_LABEL", "카카오톡 문의").strip() or "카카오톡 문의"
 
 if ROOT_PATH and not ROOT_PATH.startswith("/"):
     ROOT_PATH = f"/{ROOT_PATH}"
@@ -105,6 +107,8 @@ def render_login_page(request: Request, *, status_code: int = 200, username: str
             "app_title": APP_TITLE,
             "username": username,
             "login_error": error,
+            "support_kakao_url": SUPPORT_KAKAO_URL,
+            "support_kakao_label": SUPPORT_KAKAO_LABEL,
         },
         status_code=status_code,
     )

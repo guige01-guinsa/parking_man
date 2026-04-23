@@ -48,7 +48,7 @@
         {% if login_error %}
         <div class="auth-alert" role="alert" aria-live="polite">
           <strong>{{ login_error }}</strong>
-          <p>문제가 계속되면 관리자에게 계정 상태 확인 또는 비밀번호 재설정을 요청해 주세요.</p>
+          <p>문제가 계속되면 관리자에게 문의해 주세요. 계정 상태 확인 또는 비밀번호 재설정을 요청할 수 있습니다.</p>
         </div>
         {% endif %}
 
@@ -67,6 +67,12 @@
         <div class="auth-help">
           <p>아이디는 발급받은 운영 계정을 사용해 주세요.</p>
           <p>로그인이 되지 않으면 입력 정보를 다시 확인한 뒤 관리자에게 문의해 주세요.</p>
+          {% if support_kakao_url %}
+          <div class="auth-support-actions">
+            <a href="{{ support_kakao_url }}" class="secondary-btn auth-link-btn" target="_blank" rel="noopener noreferrer">{{ support_kakao_label }}</a>
+            <p>카카오톡 초대 링크를 받은 경우 위 버튼을 눌러 바로 이동할 수 있습니다.</p>
+          </div>
+          {% endif %}
         </div>
       </section>
     </section>

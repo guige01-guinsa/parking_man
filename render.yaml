@@ -25,6 +25,10 @@ services:
         value: APT1100
       - key: PARKING_LOCAL_LOGIN_ENABLED
         value: "1"
+      - key: PARKING_SUPPORT_KAKAO_URL
+        value: ""
+      - key: PARKING_SUPPORT_KAKAO_LABEL
+        value: 카카오톡 문의
       - key: PARKING_SEED_DEMO
         value: "0"
       - key: PARKING_OCR_PROVIDER

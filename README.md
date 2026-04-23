@@ -67,6 +67,7 @@
 - Docker 배포는 개발용 `docker-compose.yml`, 운영용 `docker-compose.prod.yml`을 사용합니다.
 - Excel 원본은 `backend/imports/`에 두고, 관리자 화면에서 다시 읽기를 실행하면 됩니다.
 - 운영 중에는 관리자 화면에서 Excel 파일을 직접 업로드해 즉시 동기화할 수 있습니다.
+- 로그인 화면에 카카오톡 문의 버튼을 노출하려면 `PARKING_SUPPORT_KAKAO_URL`에 초대 또는 오픈채팅 링크를 넣고, 필요시 `PARKING_SUPPORT_KAKAO_LABEL`로 버튼 문구를 바꿉니다.
 
 ## GitHub 기반 운영 배포
 

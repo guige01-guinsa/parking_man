@@ -14,6 +14,8 @@ class UserManagementTests(unittest.TestCase):
         self.original_seed_demo = db.SEED_DEMO
         self.original_app_ready = main._app_ready
         self.original_auto_sync = main.auto_sync_registry
+        self.original_support_kakao_url = main.SUPPORT_KAKAO_URL
+        self.original_support_kakao_label = main.SUPPORT_KAKAO_LABEL
 
         db.DB_PATH = Path(self.temp_dir.name) / "parking-test.db"
         db.SEED_DEMO = False
@@ -29,6 +31,8 @@ class UserManagementTests(unittest.TestCase):
     def tearDown(self):
         main.auto_sync_registry = self.original_auto_sync
         main._app_ready = self.original_app_ready
+        main.SUPPORT_KAKAO_URL = self.original_support_kakao_url
+        main.SUPPORT_KAKAO_LABEL = self.original_support_kakao_label
         db.SEED_DEMO = self.original_seed_demo
         db.DB_PATH = self.original_db_path
         self.temp_dir.cleanup()
@@ -94,6 +98,17 @@ class UserManagementTests(unittest.TestCase):
         self.assertIn("로그인에 실패했습니다. 아이디와 비밀번호를 다시 확인해 주세요.", response.text)
         self.assertIn("주차 관리 시스템에 오신 것을 환영합니다.", response.text)
         self.assertIn('value="admin"', response.text)
+
+    def test_login_page_shows_kakao_support_link_when_configured(self):
+        main.SUPPORT_KAKAO_URL = "https://open.kakao.com/o/sample"
+        main.SUPPORT_KAKAO_LABEL = "카카오톡으로 문의"
+
+        anonymous_client = TestClient(main.app)
+        response = anonymous_client.get("/login")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("카카오톡으로 문의", response.text)
+        self.assertIn("https://open.kakao.com/o/sample", response.text)
 
 
 if __name__ == "__main__":
