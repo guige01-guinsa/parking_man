@@ -65,6 +65,25 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function phoneHref(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("+")) {
+    const digits = raw.slice(1).replace(/\D/g, "");
+    return digits ? `+${digits}` : "";
+  }
+  return raw.replace(/\D/g, "");
+}
+
+function phoneLinkMarkup(value, className = "contact-link") {
+  const label = String(value ?? "").trim();
+  const href = phoneHref(label);
+  if (!href) {
+    return escapeHtml(label || "-");
+  }
+  return `<a class="${escapeHtml(className)}" href="tel:${escapeHtml(href)}">${escapeHtml(label)}</a>`;
+}
+
 function verdictClass(verdict) {
   if (verdict === "OK") return "verdict-ok";
   if (verdict === "TEMP") return "verdict-temp";
@@ -152,6 +171,7 @@ function toMatchItem(data) {
     message: data.message || "미등록 차량",
     unit: data.unit || null,
     owner_name: data.owner_name || null,
+    phone: data.phone || null,
     status: data.status || null,
     valid_from: data.valid_from || null,
     valid_to: data.valid_to || null,
@@ -189,15 +209,16 @@ function renderVerdict(data) {
   verdictDetail.textContent = data.owner_name || data.unit ? `${data.owner_name || "-"} / ${data.unit || "-"}` : "차량 등록정보가 없습니다.";
 
   const meta = [
-    ["차량번호", data.plate || "-"],
-    ["상태", data.status || "-"],
-    ["동호수", data.unit || "-"],
-    ["차주", data.owner_name || "-"],
-    ["시작일", data.valid_from || "-"],
-    ["만료일", data.valid_to || "-"],
+    { label: "차량번호", value: data.plate || "-" },
+    { label: "상태", value: data.status || "-" },
+    { label: "동호수", value: data.unit || "-" },
+    { label: "차주", value: data.owner_name || "-" },
+    { label: "연락처", html: phoneLinkMarkup(data.phone, "contact-link contact-link-light") },
+    { label: "시작일", value: data.valid_from || "-" },
+    { label: "만료일", value: data.valid_to || "-" },
   ];
   verdictMeta.innerHTML = meta
-    .map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`)
+    .map((item) => `<div><dt>${escapeHtml(item.label)}</dt><dd>${item.html ?? escapeHtml(item.value || "-")}</dd></div>`)
     .join("");
 
   if (data.verdict === "OK") {
@@ -293,6 +314,7 @@ function renderSearchResults(rows) {
           <span class="result-badge ${badgeClass((row.status || "active").toUpperCase() === "BLOCKED" ? "BLOCKED" : (row.status || "active") === "temp" ? "TEMP" : "OK")}">${escapeHtml(row.status || "active")}</span>
         </div>
         <div>${escapeHtml(row.owner_name || "-")} / ${escapeHtml(row.unit || "-")}</div>
+        <div class="subtle">연락처 ${phoneLinkMarkup(row.phone)}</div>
         <div class="subtle">${escapeHtml(row.note || "비고 없음")}</div>
       </article>
     `)

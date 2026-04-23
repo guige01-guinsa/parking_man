@@ -666,6 +666,18 @@ summary:focus-visible {
   font-weight: 700;
 }
 
+.contact-link {
+  color: var(--brand-deep);
+  font-weight: 800;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  word-break: break-all;
+}
+
+.contact-link-light {
+  color: white;
+}
+
 .search-row input {
   flex: 1;
 }

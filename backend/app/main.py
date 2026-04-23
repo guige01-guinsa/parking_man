@@ -55,6 +55,7 @@ class CheckMatch(BaseModel):
     message: str
     unit: str | None = None
     owner_name: str | None = None
+    phone: str | None = None
     status: str | None = None
     valid_from: str | None = None
     valid_to: str | None = None
@@ -175,6 +176,7 @@ def build_check_match(plate: str, vehicle: dict[str, Any] | None) -> CheckMatch:
         message=verdict.message,
         unit=verdict.unit,
         owner_name=verdict.owner_name,
+        phone=(vehicle or {}).get("phone"),
         status=verdict.status,
         valid_from=verdict.valid_from,
         valid_to=verdict.valid_to,

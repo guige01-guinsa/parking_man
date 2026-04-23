@@ -51,6 +51,7 @@ class RegistryCheckTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["plate"], "12가3456")
+        self.assertEqual(body["phone"], "010-1111-2222")
         self.assertEqual(body["match_mode"], "exact")
         self.assertEqual(body["match_count"], 1)
 
@@ -62,7 +63,9 @@ class RegistryCheckTests(unittest.TestCase):
         self.assertEqual(body["match_mode"], "suffix")
         self.assertEqual(body["match_count"], 2)
         self.assertEqual(body["plate"], "12가3456")
+        self.assertEqual(body["phone"], "010-1111-2222")
         self.assertEqual([item["plate"] for item in body["matches"]], ["12가3456", "77하3456"])
+        self.assertEqual([item["phone"] for item in body["matches"]], ["010-1111-2222", "010-2222-3333"])
 
     def test_suffix_check_returns_unregistered_when_missing(self):
         response = self.client.get("/api/registry/check", params={"plate": "9999"})
@@ -72,6 +75,14 @@ class RegistryCheckTests(unittest.TestCase):
         self.assertEqual(body["match_mode"], "suffix")
         self.assertEqual(body["match_count"], 0)
         self.assertEqual(body["verdict"], "UNREGISTERED")
+
+    def test_search_returns_phone_field(self):
+        response = self.client.get("/api/registry/search", params={"q": "홍길동"})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(len(body), 1)
+        self.assertEqual(body[0]["plate"], "12가3456")
+        self.assertEqual(body[0]["phone"], "010-1111-2222")
 
 
 if __name__ == "__main__":
