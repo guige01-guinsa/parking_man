@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: parking-man
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    envVars:
+      - key: PARKING_APP_TITLE
+        value: 아파트 주차단속 시스템
+      - key: PARKING_SECRET_KEY
+        generateValue: true
+      - key: PARKING_SESSION_MAX_AGE
+        value: "43200"
+      - key: PARKING_DB_PATH
+        value: /data/parking.db
+      - key: PARKING_UPLOAD_DIR
+        value: /data/uploads
+      - key: PARKING_IMPORT_DIR
+        value: /data/imports
+      - key: PARKING_ROOT_PATH
+        value: ""
+      - key: PARKING_DEFAULT_SITE_CODE
+        value: APT1100
+      - key: PARKING_LOCAL_LOGIN_ENABLED
+        value: "1"
+      - key: PARKING_SEED_DEMO
+        value: "0"
+      - key: PARKING_OCR_PROVIDER
+        value: tesseract
+      - key: PARKING_OCR_LANG
+        value: kor+eng
+    disk:
+      name: parking-data
+      mountPath: /data
+      sizeGB: 10

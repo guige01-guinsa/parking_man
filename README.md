@@ -72,6 +72,7 @@
 - `docker-compose.prod.yml`
 - `deploy.sh`
 - `deploy.ps1`
+- `render.yaml`
 
 배포 흐름:
 
@@ -111,3 +112,23 @@
 
 - 저장소가 `private`이고 GHCR 패키지도 비공개면 서버에서 먼저 `docker login ghcr.io`가 필요합니다.
 - 저장소가 `public`이면 GHCR 이미지를 공개 패키지로 두는 편이 운영이 단순합니다.
+
+## Render 배포
+
+이 저장소 루트에는 Render Blueprint 파일인 `render.yaml`이 포함되어 있습니다. Render 대시보드에서 저장소를 선택하면 다음 설정이 자동으로 채워집니다.
+
+- Web Service
+- Runtime: Docker
+- Dockerfile: `./backend/Dockerfile`
+- Docker Context: `./backend`
+- Health Check: `/health`
+- Persistent Disk: `/data`
+- 데이터 경로:
+  - DB: `/data/parking.db`
+  - 업로드: `/data/uploads`
+  - Excel 원본: `/data/imports`
+
+중요:
+
+- Render의 Persistent Disk는 유료 웹서비스에서만 사용할 수 있으므로 `render.yaml`은 `starter` 플랜 기준으로 작성했습니다.
+- 서비스 생성 후 `Shell` 또는 파일 업로드 기능으로 Excel 원본을 `/data/imports` 아래에 넣어야 등록차량 동기화가 가능합니다.
