@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ app_title }}</title>
+  <link rel="stylesheet" href="{{ request.url_for('static', path='app.css') }}">
+</head>
+<body
+  class="app-body"
+  data-site-code="{{ site_code }}"
+  data-role="{{ role }}"
+  data-import-dir="{{ import_dir }}"
+  data-root-path="{{ request.scope.root_path }}"
+>
+  <div class="bg-orb orb-a"></div>
+  <div class="bg-orb orb-b"></div>
+
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Field Enforcement</p>
+        <h1>{{ app_title }}</h1>
+        <p class="subtle">{{ site_code }} · {{ username }} · {{ role }}</p>
+      </div>
+      <form method="post" action="{{ request.url_for('logout') }}">
+        <button type="submit" class="ghost-btn">로그아웃</button>
+      </form>
+    </header>
+
+    <section class="hero-card">
+      <div>
+        <p class="eyebrow">현장 흐름</p>
+        <h2>촬영 → OCR 후보 확인 → 등록 여부 판단 → 단속기록 저장</h2>
+        <p class="subtle">OCR 결과는 자동 확정하지 않고 직원이 한 번 확인하는 구조입니다. 실제 현장에서 오탐을 줄이기 위한 방식입니다.</p>
+      </div>
+      <div class="hero-meta">
+        <span class="pill">OCR: {{ ocr_provider }}</span>
+        <span class="pill">Excel Sync: {{ import_dir }}</span>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Step 1</p>
+            <h3>번호판 촬영 또는 직접 입력</h3>
+          </div>
+        </div>
+
+        <form id="scan-form" class="stack-form">
+          <label class="file-field">
+            <span>번호판 사진</span>
+            <input id="photo" type="file" name="photo" accept="image/*" capture="environment">
+          </label>
+
+          <div class="two-col">
+            <label>
+              <span>차량번호</span>
+              <input id="plate-input" type="text" name="plate" placeholder="예: 12가3456">
+            </label>
+            <label>
+              <span>단속자</span>
+              <input id="inspector" type="text" name="inspector" placeholder="경비1조">
+            </label>
+          </div>
+
+          <div class="two-col">
+            <label>
+              <span>위치</span>
+              <input id="location" type="text" name="location" placeholder="지상 2구역">
+            </label>
+            <label>
+              <span>메모</span>
+              <input id="memo" type="text" name="memo" placeholder="소화전 앞">
+            </label>
+          </div>
+
+          <div class="button-row">
+            <button id="scan-btn" type="button" class="primary-btn">OCR 판독</button>
+            <button id="check-btn" type="button" class="secondary-btn">번호 조회</button>
+            <button id="save-btn" type="button" class="danger-btn">기록 저장</button>
+          </div>
+        </form>
+
+        <div id="ocr-note" class="note-box">카메라가 없거나 OCR이 잘 안 읽히면 차량번호를 직접 입력해도 됩니다.</div>
+        <div id="candidate-list" class="candidate-list"></div>
+        <pre id="ocr-raw" class="ocr-raw" hidden></pre>
+      </article>
+
+      <article class="panel verdict-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Step 2</p>
+            <h3>판정 결과</h3>
+          </div>
+        </div>
+        <div id="verdict-card" class="verdict-card verdict-idle">
+          <p class="verdict-label">대기 중</p>
+          <h4 id="verdict-title">촬영 후 판독하거나 차량번호를 조회해 주세요.</h4>
+          <p id="verdict-detail" class="subtle">등록차량/차단/기간만료/임시 여부를 즉시 확인합니다.</p>
+          <dl id="verdict-meta" class="meta-list"></dl>
+        </div>
+
+        <div class="geo-box">
+          <button id="geo-btn" type="button" class="ghost-btn">현재 위치 가져오기</button>
+          <p id="geo-status" class="subtle">위치 권한을 허용하면 단속 위치 좌표를 저장합니다.</p>
+        </div>
+      </article>
+    </section>
+
+    <section class="grid lower-grid">
+      <article class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Search</p>
+            <h3>등록차량 빠른 검색</h3>
+          </div>
+        </div>
+        <div class="search-row">
+          <input id="search-query" type="text" placeholder="차량번호, 동호수, 차주명">
+          <button id="search-btn" type="button" class="secondary-btn">검색</button>
+        </div>
+        <div id="search-results" class="list-board empty-state">검색 결과가 여기에 표시됩니다.</div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Recent</p>
+            <h3>최근 단속 기록</h3>
+          </div>
+        </div>
+        <div id="recent-results" class="list-board empty-state">저장된 기록을 불러오는 중입니다.</div>
+      </article>
+    </section>
+
+    {% if is_admin %}
+    <section class="panel admin-panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Admin</p>
+          <h3>Excel 등록차량 동기화</h3>
+        </div>
+        <button id="sync-btn" type="button" class="primary-btn">지정 폴더 다시 읽기</button>
+      </div>
+      <div id="registry-status" class="status-board">동기화 상태를 불러오는 중입니다.</div>
+    </section>
+    {% endif %}
+  </main>
+
+  <script src="{{ request.url_for('static', path='app.js') }}"></script>
+</body>
+</html>

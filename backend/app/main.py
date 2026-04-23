@@ -1,298 +1,399 @@
-import os
-import json
-import urllib.parse
-from datetime import date
-from pathlib import Path
-import uuid
-import html as _html
+from __future__ import annotations
 
-from fastapi import FastAPI, Header, HTTPException, UploadFile, File, Form, Request
+import os
+import shutil
+import threading
+import uuid
+from pathlib import Path
+from typing import Any
+
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
-from typing import Optional, Literal
-from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
-from .db import init_db, seed_demo, seed_users, connect, normalize_site_code
-from .auth import make_session, pbkdf2_verify, read_session
+from .auth import COOKIE_NAME, make_session, pbkdf2_verify, read_session, require_role
+from .db import DEFAULT_SITE_CODE, connect, init_db, maybe_seed_demo, normalize_site_code, seed_users
+from .excel_import import sync_registry_from_dir
+from .ocr import scan_plate_image
+from .plates import PlateVerdict, evaluate_vehicle_row, normalize_plate
 
-API_KEY = os.getenv("PARKING_API_KEY", "change-me")
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
+UPLOAD_DIR = Path(os.getenv("PARKING_UPLOAD_DIR", str(BASE_DIR / "uploads")))
+IMPORT_DIR = Path(os.getenv("PARKING_IMPORT_DIR", str(BASE_DIR.parent / "imports")))
+APP_TITLE = os.getenv("PARKING_APP_TITLE", "아파트 주차단속 시스템")
 ROOT_PATH = os.getenv("PARKING_ROOT_PATH", "").strip()
+LOCAL_LOGIN_ENABLED = os.getenv("PARKING_LOCAL_LOGIN_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+
 if ROOT_PATH and not ROOT_PATH.startswith("/"):
     ROOT_PATH = f"/{ROOT_PATH}"
 ROOT_PATH = ROOT_PATH.rstrip("/")
-DEFAULT_SITE_CODE = normalize_site_code(os.getenv("PARKING_DEFAULT_SITE_CODE", "COMMON"))
-LOCAL_LOGIN_ENABLED = os.getenv("PARKING_LOCAL_LOGIN_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
-CONTEXT_SECRET = os.getenv("PARKING_CONTEXT_SECRET", os.getenv("PARKING_SECRET_KEY", "change-this-secret"))
-CONTEXT_MAX_AGE = int(os.getenv("PARKING_CONTEXT_MAX_AGE", "300"))
-PORTAL_URL = (os.getenv("PARKING_PORTAL_URL") or "").strip()
-PORTAL_LOGIN_URL = (os.getenv("PARKING_PORTAL_LOGIN_URL") or "").strip()
-_ctx_ser = URLSafeTimedSerializer(CONTEXT_SECRET, salt="parking-context")
-UPLOAD_DIR = Path(os.getenv("PARKING_UPLOAD_DIR", str(Path(__file__).resolve().parent / "uploads")))
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="Parking Enforcer API", version="1.0.0", root_path=ROOT_PATH)
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+IMPORT_DIR.mkdir(parents=True, exist_ok=True)
+
+app = FastAPI(title=APP_TITLE, version="2.0.0", root_path=ROOT_PATH)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
+
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+_ready_lock = threading.Lock()
+_app_ready = False
+
+
+class CheckResponse(BaseModel):
+    site_code: str
+    plate: str
+    verdict: str
+    message: str
+    unit: str | None = None
+    owner_name: str | None = None
+    status: str | None = None
+    valid_from: str | None = None
+    valid_to: str | None = None
 
 
 def app_url(path: str) -> str:
     if not path.startswith("/"):
         path = f"/{path}"
-    if ROOT_PATH:
-        return f"{ROOT_PATH}{path}"
-    return path
-
-def require_key(x_api_key: str | None):
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API key")
+    return f"{ROOT_PATH}{path}" if ROOT_PATH else path
 
 
-def map_permission_to_role(permission_level: str) -> str:
-    raw = (permission_level or "").strip().lower()
-    if raw == "admin":
-        return "admin"
-    if raw == "site_admin":
-        return "guard"
-    if raw == "user":
-        return "viewer"
-    raise HTTPException(status_code=400, detail="Invalid permission_level")
+def session_cookie_path() -> str:
+    return ROOT_PATH or "/"
 
 
-def resolve_site_scope(request: Request, x_site_code: str | None = None) -> str:
-    sess = read_session(request)
-    if sess and sess.get("sc"):
-        return normalize_site_code(str(sess["sc"]))
-    if x_site_code:
-        return normalize_site_code(x_site_code)
-    return DEFAULT_SITE_CODE
+def current_site_code(request: Request) -> str:
+    session = read_session(request)
+    if session and session.get("sc"):
+        return normalize_site_code(session["sc"])
+    return normalize_site_code(DEFAULT_SITE_CODE)
 
 
-def portal_login_url(next_path: str = "/parking/admin2") -> str:
-    nxt_enc = urllib.parse.quote(next_path, safe="")
-    base = PORTAL_LOGIN_URL
-    if not base:
-        if PORTAL_URL:
-            base = PORTAL_URL if "login.html" in PORTAL_URL else f"{PORTAL_URL.rstrip('/')}/login.html"
-        else:
-            base = "https://www.ka-part.com/pwa/login.html"
-    if "{next}" in base:
-        return base.replace("{next}", nxt_enc)
-    if "next=" in base:
-        return base
-    sep = "&" if "?" in base else "?"
-    return f"{base}{sep}next={nxt_enc}"
+def ensure_ready() -> None:
+    global _app_ready
+    if _app_ready:
+        return
+    with _ready_lock:
+        if _app_ready:
+            return
+        init_db()
+        seed_users()
+        maybe_seed_demo()
+        auto_sync_registry()
+        _app_ready = True
 
 
-def integration_required_page(status_code: int = 200) -> HTMLResponse:
-    target = portal_login_url()
-    target_js = json.dumps(target, ensure_ascii=False)
-    link = (
-        f"""<p><a href="{_html.escape(target)}">아파트 시설관리 시스템으로 이동</a></p>"""
-        if target
-        else "<p>아파트 시설관리 시스템의 '주차관리' 메뉴를 통해 접속하세요.</p>"
+def lookup_vehicle(site_code: str, plate: str) -> dict[str, Any] | None:
+    ensure_ready()
+    normalized = normalize_plate(plate)
+    with connect() as con:
+        row = con.execute(
+            "SELECT * FROM vehicles WHERE site_code = ? AND plate = ?",
+            (site_code, normalized),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def build_check_response(site_code: str, plate: str) -> CheckResponse:
+    normalized = normalize_plate(plate)
+    if not normalized:
+        raise HTTPException(status_code=400, detail="차량번호를 입력해 주세요.")
+    vehicle = lookup_vehicle(site_code, normalized)
+    verdict: PlateVerdict = evaluate_vehicle_row(vehicle)
+    return CheckResponse(
+        site_code=site_code,
+        plate=normalized,
+        verdict=verdict.verdict,
+        message=verdict.message,
+        unit=verdict.unit,
+        owner_name=verdict.owner_name,
+        status=verdict.status,
+        valid_from=verdict.valid_from,
+        valid_to=verdict.valid_to,
     )
-    auto = f"<script>window.location.replace({target_js});</script>" if target else ""
-    body = f"<h2>Parking Login</h2><p>통합 로그인 전용입니다.</p>{link}{auto}"
-    return HTMLResponse(body, status_code=status_code)
+
+
+def save_photo(photo: UploadFile) -> str | None:
+    if not photo.filename:
+        return None
+    suffix = Path(photo.filename).suffix.lower() or ".jpg"
+    name = f"{uuid.uuid4().hex}{suffix}"
+    file_path = UPLOAD_DIR / name
+    with file_path.open("wb") as target:
+        shutil.copyfileobj(photo.file, target)
+    return app_url(f"/uploads/{name}")
+
+
+def auto_sync_registry() -> None:
+    excel_files = [path for path in IMPORT_DIR.iterdir() if path.is_file() and path.suffix.lower() in {".xlsx", ".xlsm"} and not path.name.startswith("~$")]
+    if not excel_files:
+        return
+    try:
+        sync_registry_from_dir(IMPORT_DIR, DEFAULT_SITE_CODE)
+    except Exception as exc:
+        print(f"[startup] registry sync failed: {exc}")
+
 
 @app.on_event("startup")
-def _startup():
-    init_db()
-    seed_demo()
-    seed_users()
+def on_startup() -> None:
+    ensure_ready()
 
-def today_iso() -> str:
-    return date.today().isoformat()
 
 @app.get("/health")
-def health():
+def health() -> dict[str, bool]:
     return {"ok": True}
 
-@app.get("/", include_in_schema=False)
-def root():
-    # Render 기본 헬스/브라우저 접근 시 404를 내지 않도록 루트 엔트리 제공
-    if LOCAL_LOGIN_ENABLED:
-        return RedirectResponse(url=app_url("/login"), status_code=302)
-    return integration_required_page(status_code=200)
+
+@app.get("/")
+def root(request: Request):
+    if read_session(request):
+        return RedirectResponse(url=app_url("/field"), status_code=302)
+    return RedirectResponse(url=app_url("/login"), status_code=302)
+
 
 @app.head("/", include_in_schema=False)
 def root_head():
-    if LOCAL_LOGIN_ENABLED:
-        return Response(status_code=302, headers={"Location": app_url("/login")})
-    return Response(status_code=200)
+    return Response(status_code=302, headers={"Location": app_url("/login")})
+
 
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon():
-    # favicon 미제공 시 잦은 404 로그를 피하기 위해 204 응답
     return Response(status_code=204)
 
+
 @app.get("/login", response_class=HTMLResponse)
-def login_page():
+def login_page(request: Request):
+    if read_session(request):
+        return RedirectResponse(url=app_url("/field"), status_code=302)
     if not LOCAL_LOGIN_ENABLED:
-        return integration_required_page(status_code=200)
-    login_action = app_url("/login")
-    return f"<h2>Login</h2><form method='POST' action='{login_action}'><input name='username'/><input name='password' type='password'/><button>Login</button></form>"
+        return HTMLResponse("<h2>통합 로그인 모드입니다.</h2>", status_code=403)
+    return templates.TemplateResponse(
+        request=request,
+        name="login.html",
+        context={"app_title": APP_TITLE},
+    )
+
 
 @app.post("/login")
-def login_submit(username: str = Form(...), password: str = Form(...)):
+def login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
     if not LOCAL_LOGIN_ENABLED:
-        return integration_required_page(status_code=403)
-    u = username.strip()
+        raise HTTPException(status_code=403, detail="통합 로그인 전용입니다.")
+
+    ensure_ready()
+    user_name = username.strip()
     with connect() as con:
-        row = con.execute("SELECT * FROM users WHERE username=?", (u,)).fetchone()
+        row = con.execute("SELECT * FROM users WHERE username = ?", (user_name,)).fetchone()
     if not row or not pbkdf2_verify(password, row["pw_hash"]):
-        return HTMLResponse("Invalid credentials", status_code=401)
-    token = make_session(u, row["role"], site_code=DEFAULT_SITE_CODE)
-    resp = RedirectResponse(url=app_url("/admin2"), status_code=302)
-    resp.set_cookie("parking_session", token, httponly=True, samesite="lax", path=ROOT_PATH or "/")
-    return resp
+        raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 올바르지 않습니다.")
 
+    token = make_session(user_name, row["role"], normalize_site_code(DEFAULT_SITE_CODE))
+    response = RedirectResponse(url=app_url("/field"), status_code=302)
+    response.set_cookie(
+        COOKIE_NAME,
+        token,
+        httponly=True,
+        samesite="lax",
+        path=session_cookie_path(),
+    )
+    return response
 
-@app.get("/sso")
-def sso_login(ctx: str):
-    try:
-        payload = _ctx_ser.loads(ctx, max_age=CONTEXT_MAX_AGE)
-    except SignatureExpired as exc:
-        raise HTTPException(status_code=401, detail="Context token expired") from exc
-    except BadSignature as exc:
-        raise HTTPException(status_code=401, detail="Invalid context token") from exc
-
-    raw_site_code = str(payload.get("site_code") or "").strip()
-    if not raw_site_code:
-        raise HTTPException(status_code=400, detail="Context token missing site_code")
-    site_code = normalize_site_code(raw_site_code)
-
-    permission_level = str(payload.get("permission_level") or "").strip().lower()
-    if not permission_level:
-        raise HTTPException(status_code=400, detail="Context token missing permission_level")
-    role = map_permission_to_role(permission_level)
-    token = make_session("ka-part-user", role, site_code=site_code)
-    resp = RedirectResponse(url=app_url("/admin2"), status_code=302)
-    resp.set_cookie("parking_session", token, httponly=True, samesite="lax", path=ROOT_PATH or "/")
-    return resp
 
 @app.post("/logout")
 def logout():
-    target = app_url("/login")
-    if not LOCAL_LOGIN_ENABLED and PORTAL_URL:
-        target = PORTAL_URL
-    resp = RedirectResponse(url=target, status_code=302)
-    resp.delete_cookie("parking_session", path=ROOT_PATH or "/")
-    return resp
+    response = RedirectResponse(url=app_url("/login"), status_code=302)
+    response.delete_cookie(COOKIE_NAME, path=session_cookie_path())
+    return response
 
-class CheckResponse(BaseModel):
-    site_code: str
-    plate: str
-    verdict: Literal["OK","UNREGISTERED","BLOCKED","EXPIRED","TEMP"]
-    message: str
-    unit: Optional[str] = None
-    owner_name: Optional[str] = None
-    status: Optional[str] = None
-    valid_from: Optional[str] = None
-    valid_to: Optional[str] = None
 
-@app.get("/api/plates/check", response_model=CheckResponse)
-def check_plate(
-    plate: str,
-    request: Request,
-    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
-    x_site_code: str | None = Header(default=None, alias="X-Site-Code"),
-):
-    require_key(x_api_key)
-    site_code = resolve_site_scope(request, x_site_code)
-    p = plate.strip().upper()
+@app.get("/field", response_class=HTMLResponse)
+def field_page(request: Request):
+    ensure_ready()
+    session = require_role(request, {"admin", "guard", "viewer"})
+    return templates.TemplateResponse(
+        request=request,
+        name="field.html",
+        context={
+            "app_title": APP_TITLE,
+            "site_code": normalize_site_code(session.get("sc")),
+            "role": session.get("r"),
+            "username": session.get("u"),
+            "is_admin": session.get("r") == "admin",
+            "import_dir": str(IMPORT_DIR),
+            "ocr_provider": os.getenv("PARKING_OCR_PROVIDER", "tesseract"),
+        },
+    )
+
+
+@app.get("/api/me")
+def api_me(request: Request):
+    ensure_ready()
+    session = require_role(request, {"admin", "guard", "viewer"})
+    return {
+        "username": session.get("u"),
+        "role": session.get("r"),
+        "site_code": normalize_site_code(session.get("sc")),
+    }
+
+
+@app.get("/api/registry/check", response_model=CheckResponse)
+def api_registry_check(request: Request, plate: str):
+    require_role(request, {"admin", "guard", "viewer"})
+    return build_check_response(current_site_code(request), plate)
+
+
+@app.get("/api/registry/search")
+def api_registry_search(request: Request, q: str = "", limit: int = 20):
+    ensure_ready()
+    require_role(request, {"admin", "guard", "viewer"})
+    site_code = current_site_code(request)
+    limit = min(max(limit, 1), 50)
+    query = normalize_plate(q) or q.strip()
+    like = f"%{query}%"
     with connect() as con:
-        row = con.execute("SELECT * FROM vehicles WHERE site_code = ? AND plate = ?", (site_code, p)).fetchone()
-    if not row:
-        return CheckResponse(site_code=site_code, plate=p, verdict="UNREGISTERED", message="미등록 차량")
-    status = (row["status"] or "active").lower()
-    vf, vt = row["valid_from"], row["valid_to"]
-    t = today_iso()
-    if status == "blocked":
-        return CheckResponse(site_code=site_code, plate=p, verdict="BLOCKED", message="차단 차량", unit=row["unit"], owner_name=row["owner_name"], status=status, valid_from=vf, valid_to=vt)
-    if vt and t > vt:
-        return CheckResponse(site_code=site_code, plate=p, verdict="EXPIRED", message="기간 만료", unit=row["unit"], owner_name=row["owner_name"], status=status, valid_from=vf, valid_to=vt)
-    if status == "temp":
-        return CheckResponse(site_code=site_code, plate=p, verdict="TEMP", message="임시 등록", unit=row["unit"], owner_name=row["owner_name"], status=status, valid_from=vf, valid_to=vt)
-    return CheckResponse(site_code=site_code, plate=p, verdict="OK", message="정상 등록", unit=row["unit"], owner_name=row["owner_name"], status=status, valid_from=vf, valid_to=vt)
+        rows = con.execute(
+            """
+            SELECT plate, unit, owner_name, phone, status, valid_from, valid_to, note, source_file, source_sheet
+            FROM vehicles
+            WHERE site_code = ?
+              AND (
+                plate LIKE ?
+                OR COALESCE(unit, '') LIKE ?
+                OR COALESCE(owner_name, '') LIKE ?
+              )
+            ORDER BY updated_at DESC, plate
+            LIMIT ?
+            """,
+            (site_code, like, like, like, limit),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
-class ViolationOut(BaseModel):
-    id: int
-    site_code: str
-    plate: str
-    verdict: str
-    rule_code: Optional[str] = None
-    location: Optional[str] = None
-    memo: Optional[str] = None
-    inspector: Optional[str] = None
-    photo_path: Optional[str] = None
-    lat: Optional[float] = None
-    lng: Optional[float] = None
-    created_at: str
 
-@app.post("/api/violations/upload", response_model=ViolationOut)
-def create_violation_with_photo(
+@app.get("/api/registry/status")
+def api_registry_status(request: Request):
+    ensure_ready()
+    require_role(request, {"admin", "guard", "viewer"})
+    site_code = current_site_code(request)
+    with connect() as con:
+        vehicle_count = con.execute("SELECT COUNT(*) AS cnt FROM vehicles WHERE site_code = ?", (site_code,)).fetchone()["cnt"]
+        last_run = con.execute(
+            """
+            SELECT id, source_dir, files_count, rows_count, imported_at, status, message
+            FROM import_runs
+            WHERE site_code = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (site_code,),
+        ).fetchone()
+    return {
+        "site_code": site_code,
+        "vehicle_count": vehicle_count,
+        "import_dir": str(IMPORT_DIR),
+        "ocr_provider": os.getenv("PARKING_OCR_PROVIDER", "tesseract"),
+        "last_sync": dict(last_run) if last_run else None,
+    }
+
+
+@app.post("/api/registry/sync")
+def api_registry_sync(request: Request):
+    ensure_ready()
+    require_role(request, {"admin"})
+    try:
+        return sync_registry_from_dir(IMPORT_DIR, current_site_code(request))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/ocr/scan")
+async def api_ocr_scan(request: Request, photo: UploadFile = File(...), manual_plate: str | None = Form(None)):
+    ensure_ready()
+    require_role(request, {"admin", "guard", "viewer"})
+    image_bytes = await photo.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="사진 파일이 비어 있습니다.")
+
+    scan = scan_plate_image(image_bytes)
+    best_plate = normalize_plate(manual_plate) or (scan.candidates[0] if scan.candidates else None)
+    match = build_check_response(current_site_code(request), best_plate).model_dump() if best_plate else None
+    return {
+        "provider": scan.provider,
+        "raw_text": scan.raw_text,
+        "candidates": scan.candidates,
+        "best_plate": best_plate,
+        "match": match,
+        "error": scan.error,
+    }
+
+
+@app.post("/api/enforcement/submit")
+async def api_enforcement_submit(
     request: Request,
     plate: str = Form(...),
-    verdict: str = Form(...),
-    rule_code: str | None = Form(None),
+    inspector: str | None = Form(None),
     location: str | None = Form(None),
     memo: str | None = Form(None),
-    inspector: str | None = Form(None),
+    raw_ocr_text: str | None = Form(None),
     lat: float | None = Form(None),
     lng: float | None = Form(None),
-    photo: UploadFile = File(...),
-    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
-    x_site_code: str | None = Header(default=None, alias="X-Site-Code"),
+    photo: UploadFile | None = File(None),
 ):
-    require_key(x_api_key)
-    site_code = resolve_site_scope(request, x_site_code)
-    p = plate.strip().upper()
-    ext = os.path.splitext(photo.filename or "")[1].lower() or ".jpg"
-    fname = f"{uuid.uuid4().hex}{ext}"
-    fpath = UPLOAD_DIR / fname
-    with open(fpath, "wb") as f:
-        f.write(photo.file.read())
-    rel = app_url(f"/uploads/{fname}")
+    ensure_ready()
+    require_role(request, {"admin", "guard"})
+    site_code = current_site_code(request)
+    check = build_check_response(site_code, plate)
+    photo_path = save_photo(photo) if photo else None
+
     with connect() as con:
         cur = con.execute(
-            "INSERT INTO violations (site_code, plate, verdict, rule_code, location, memo, inspector, photo_path, lat, lng) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (site_code, p, verdict, rule_code, location, memo, inspector, rel, lat, lng),
+            """
+            INSERT INTO enforcement_events
+            (site_code, plate, raw_ocr_text, verdict, verdict_message, unit, owner_name, vehicle_status, inspector, location, memo, photo_path, lat, lng)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                site_code,
+                check.plate,
+                raw_ocr_text,
+                check.verdict,
+                check.message,
+                check.unit,
+                check.owner_name,
+                check.status,
+                inspector,
+                location,
+                memo,
+                photo_path,
+                lat,
+                lng,
+            ),
         )
-        vid = cur.lastrowid
-        row = con.execute("SELECT * FROM violations WHERE id = ?", (vid,)).fetchone()
-    return ViolationOut(**dict(row))
+        event_id = cur.lastrowid
+        row = con.execute("SELECT * FROM enforcement_events WHERE id = ?", (event_id,)).fetchone()
+        con.commit()
 
-def esc(v): return _html.escape(str(v)) if v is not None else ""
+    return dict(row)
 
-@app.get("/admin2", response_class=HTMLResponse)
-def admin2(request: Request):
-    s = read_session(request)
-    if not s:
-        if not LOCAL_LOGIN_ENABLED:
-            return integration_required_page(status_code=401)
-        raise HTTPException(status_code=401, detail="Login required")
-    if s.get("r") not in {"admin", "guard", "viewer"}:
-        raise HTTPException(status_code=403, detail="Forbidden")
 
-    site_code = normalize_site_code(s.get("sc"))
+@app.get("/api/enforcement/recent")
+def api_enforcement_recent(request: Request, limit: int = 20):
+    ensure_ready()
+    require_role(request, {"admin", "guard", "viewer"})
+    site_code = current_site_code(request)
+    limit = min(max(limit, 1), 50)
     with connect() as con:
-        vs = con.execute(
-            "SELECT * FROM vehicles WHERE site_code=? ORDER BY updated_at DESC LIMIT 200",
-            (site_code,),
+        rows = con.execute(
+            """
+            SELECT id, plate, verdict, verdict_message, unit, owner_name, inspector, location, memo, photo_path, created_at
+            FROM enforcement_events
+            WHERE site_code = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (site_code, limit),
         ).fetchall()
-        logs = con.execute(
-            "SELECT * FROM violations WHERE site_code=? ORDER BY created_at DESC LIMIT 100",
-            (site_code,),
-        ).fetchall()
-    v_rows = "".join([f"<tr><td>{esc(r['plate'])}</td><td>{esc(r['status'])}</td><td>{esc(r['unit'])}</td><td>{esc(r['owner_name'])}</td></tr>" for r in vs])
-    l_rows = "".join([f"<tr><td>{esc(r['created_at'])}</td><td>{esc(r['plate'])}</td><td>{esc(r['verdict'])}</td><td>{esc(r['photo_path'] or '-')}</td></tr>" for r in logs])
-    logout_path = app_url("/logout")
-    top_link = (
-        f"""<a href="{logout_path}" onclick="fetch('{logout_path}',{{method:'POST'}});return false;">Logout</a>"""
-        if LOCAL_LOGIN_ENABLED
-        else (f"""<a href="{_html.escape(PORTAL_URL)}">시설관리로 돌아가기</a>""" if PORTAL_URL else "")
-    )
-    return f"""<h2>Admin ({esc(site_code)})</h2>{top_link}
-    <h3>Vehicles</h3><table border=1><tr><th>Plate</th><th>Status</th><th>Unit</th><th>Owner</th></tr>{v_rows}</table>
-    <h3>Violations</h3><table border=1><tr><th>At</th><th>Plate</th><th>Verdict</th><th>Photo</th></tr>{l_rows}</table>"""
+    return [dict(row) for row in rows]

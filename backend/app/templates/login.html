@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ app_title }}</title>
+  <link rel="stylesheet" href="{{ request.url_for('static', path='app.css') }}">
+</head>
+<body class="auth-body">
+  <main class="auth-shell">
+    <section class="auth-card">
+      <p class="eyebrow">Apartment Parking</p>
+      <h1>{{ app_title }}</h1>
+      <p class="auth-copy">경비실과 현장 단속 인력이 스마트폰으로 바로 사용하는 주차단속 화면입니다.</p>
+
+      <form method="post" action="{{ request.url_for('login_submit') }}" class="auth-form">
+        <label>
+          <span>아이디</span>
+          <input type="text" name="username" placeholder="admin" required>
+        </label>
+        <label>
+          <span>비밀번호</span>
+          <input type="password" name="password" placeholder="admin1234" required>
+        </label>
+        <button type="submit" class="primary-btn">로그인</button>
+      </form>
+
+      <div class="auth-help">
+        <p>기본 계정</p>
+        <p><strong>admin</strong> / admin1234</p>
+        <p><strong>guard</strong> / guard1234</p>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
