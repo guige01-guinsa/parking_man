@@ -43,6 +43,8 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 _ready_lock = threading.Lock()
 _app_ready = False
+LOGIN_INVALID_MESSAGE = "로그인에 실패했습니다. 아이디와 비밀번호를 다시 확인해 주세요."
+LOGIN_FORMAT_MESSAGE = "아이디 형식을 다시 확인해 주세요. 영문 소문자와 숫자를 사용해 입력할 수 있습니다."
 
 
 class CheckMatch(BaseModel):
@@ -93,6 +95,19 @@ def app_url(path: str) -> str:
 
 def session_cookie_path() -> str:
     return ROOT_PATH or "/"
+
+
+def render_login_page(request: Request, *, status_code: int = 200, username: str = "", error: str | None = None):
+    return templates.TemplateResponse(
+        request=request,
+        name="login.html",
+        context={
+            "app_title": APP_TITLE,
+            "username": username,
+            "login_error": error,
+        },
+        status_code=status_code,
+    )
 
 
 def current_site_code(request: Request) -> str:
@@ -375,11 +390,7 @@ def login_page(request: Request):
         return RedirectResponse(url=app_url("/field"), status_code=302)
     if not LOCAL_LOGIN_ENABLED:
         return HTMLResponse("<h2>통합 로그인 모드입니다.</h2>", status_code=403)
-    return templates.TemplateResponse(
-        request=request,
-        name="login.html",
-        context={"app_title": APP_TITLE},
-    )
+    return render_login_page(request)
 
 
 @app.post("/login")
@@ -388,11 +399,24 @@ def login_submit(request: Request, username: str = Form(...), password: str = Fo
         raise HTTPException(status_code=403, detail="통합 로그인 전용입니다.")
 
     ensure_ready()
-    user_name = normalize_username(username)
+    try:
+        user_name = normalize_username(username)
+    except HTTPException:
+        return render_login_page(
+            request,
+            status_code=400,
+            username=str(username or "").strip(),
+            error=LOGIN_FORMAT_MESSAGE,
+        )
     with connect() as con:
         row = con.execute("SELECT * FROM users WHERE username = ?", (user_name,)).fetchone()
     if not row or not pbkdf2_verify(password, row["pw_hash"]):
-        raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 올바르지 않습니다.")
+        return render_login_page(
+            request,
+            status_code=401,
+            username=user_name,
+            error=LOGIN_INVALID_MESSAGE,
+        )
 
     token = make_session(user_name, row["role"], normalize_site_code(DEFAULT_SITE_CODE))
     response = RedirectResponse(url=app_url("/field"), status_code=302)

@@ -86,6 +86,15 @@ class UserManagementTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 409)
 
+    def test_login_failure_renders_friendly_message(self):
+        relogin = TestClient(main.app)
+        response = self.login(relogin, "admin", "wrong-password")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("로그인에 실패했습니다. 아이디와 비밀번호를 다시 확인해 주세요.", response.text)
+        self.assertIn("주차 관리 시스템에 오신 것을 환영합니다.", response.text)
+        self.assertIn('value="admin"', response.text)
+
 
 if __name__ == "__main__":
     unittest.main()
