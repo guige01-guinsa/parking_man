@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
-from .auth import COOKIE_NAME, make_session, pbkdf2_verify, read_session, require_role
+from .auth import COOKIE_NAME, make_session, pbkdf2_hash, pbkdf2_verify, read_session, require_role
 from .db import DEFAULT_SITE_CODE, connect, init_db, maybe_seed_demo, normalize_site_code, seed_users
 from .excel_import import describe_excel_files, store_registry_upload, sync_registry_from_dir
 from .ocr_learning import get_learning_candidates, get_learning_status, parse_candidates_json, record_ocr_feedback
@@ -63,6 +63,26 @@ class CheckResponse(CheckMatch):
     match_count: int = 1
     match_index: int = 0
     matches: list[CheckMatch] = Field(default_factory=list)
+
+
+class UserCreateRequest(BaseModel):
+    username: str
+    password: str
+    role: str
+
+
+class UserUpdateRequest(BaseModel):
+    role: str | None = None
+    password: str | None = None
+
+
+VALID_USER_ROLES = {"admin", "guard", "viewer"}
+USERNAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{2,31}$")
+ROLE_LABELS = {
+    "admin": "관리자",
+    "guard": "경비",
+    "viewer": "조회",
+}
 
 
 def app_url(path: str) -> str:
@@ -235,6 +255,72 @@ def build_check_response(site_code: str, plate: str) -> CheckResponse:
     )
 
 
+def normalize_username(value: str | None) -> str:
+    username = str(value or "").strip().lower()
+    if not USERNAME_PATTERN.fullmatch(username):
+        raise HTTPException(status_code=400, detail="아이디는 영문 소문자, 숫자, 마침표(.), 밑줄(_), 하이픈(-)만 사용해 3~32자로 입력해 주세요.")
+    return username
+
+
+def normalize_user_role(value: str | None) -> str:
+    role = str(value or "").strip().lower()
+    if role not in VALID_USER_ROLES:
+        raise HTTPException(status_code=400, detail="권한은 admin, guard, viewer 중 하나여야 합니다.")
+    return role
+
+
+def normalize_new_password(value: str | None, *, required: bool) -> str | None:
+    if value is None:
+        if required:
+            raise HTTPException(status_code=400, detail="비밀번호를 입력해 주세요.")
+        return None
+
+    password = str(value)
+    if not password:
+        if required:
+            raise HTTPException(status_code=400, detail="비밀번호를 입력해 주세요.")
+        return None
+    if password != password.strip():
+        raise HTTPException(status_code=400, detail="비밀번호 앞뒤 공백은 사용할 수 없습니다.")
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="비밀번호는 8자 이상이어야 합니다.")
+    return password
+
+
+def user_public_dict(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    return {
+        "username": row["username"],
+        "role": row["role"],
+        "role_label": ROLE_LABELS.get(row["role"], row["role"]),
+        "created_at": row["created_at"],
+    }
+
+
+def require_existing_user(con, username: str) -> dict[str, Any]:
+    row = con.execute(
+        "SELECT username, role, created_at FROM users WHERE username = ?",
+        (username,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="해당 사용자를 찾을 수 없습니다.")
+    return dict(row)
+
+
+def ensure_not_last_admin(con, username: str, *, next_role: str | None = None, deleting: bool = False) -> None:
+    target = require_existing_user(con, username)
+    if target["role"] != "admin":
+        return
+
+    if not deleting and (next_role is None or next_role == "admin"):
+        return
+
+    admin_count = con.execute("SELECT COUNT(*) AS cnt FROM users WHERE role = 'admin'").fetchone()["cnt"]
+    if int(admin_count) <= 1:
+        raise HTTPException(status_code=400, detail="마지막 관리자 계정은 삭제하거나 다른 권한으로 변경할 수 없습니다.")
+
+
 def save_photo(photo: UploadFile) -> str | None:
     if not photo.filename:
         return None
@@ -302,7 +388,7 @@ def login_submit(request: Request, username: str = Form(...), password: str = Fo
         raise HTTPException(status_code=403, detail="통합 로그인 전용입니다.")
 
     ensure_ready()
-    user_name = username.strip()
+    user_name = normalize_username(username)
     with connect() as con:
         row = con.execute("SELECT * FROM users WHERE username = ?", (user_name,)).fetchone()
     if not row or not pbkdf2_verify(password, row["pw_hash"]):
@@ -355,6 +441,99 @@ def api_me(request: Request):
         "role": session.get("r"),
         "site_code": normalize_site_code(session.get("sc")),
     }
+
+
+@app.get("/api/users")
+def api_users_list(request: Request):
+    ensure_ready()
+    require_role(request, {"admin"})
+    with connect() as con:
+        rows = con.execute(
+            """
+            SELECT username, role, created_at
+            FROM users
+            ORDER BY CASE role WHEN 'admin' THEN 0 WHEN 'guard' THEN 1 ELSE 2 END, username
+            """
+        ).fetchall()
+    return [user_public_dict(dict(row)) for row in rows]
+
+
+@app.post("/api/users")
+def api_users_create(request: Request, payload: UserCreateRequest):
+    ensure_ready()
+    require_role(request, {"admin"})
+
+    username = normalize_username(payload.username)
+    role = normalize_user_role(payload.role)
+    password = normalize_new_password(payload.password, required=True)
+
+    with connect() as con:
+        exists = con.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone()
+        if exists:
+            raise HTTPException(status_code=409, detail="이미 사용 중인 아이디입니다.")
+
+        con.execute(
+            "INSERT INTO users(username, pw_hash, role) VALUES (?, ?, ?)",
+            (username, pbkdf2_hash(password), role),
+        )
+        row = require_existing_user(con, username)
+        con.commit()
+    return user_public_dict(row)
+
+
+@app.patch("/api/users/{username}")
+def api_users_update(request: Request, username: str, payload: UserUpdateRequest):
+    ensure_ready()
+    session = require_role(request, {"admin"})
+    normalized_username = normalize_username(username)
+    next_role = normalize_user_role(payload.role) if payload.role is not None else None
+    next_password = normalize_new_password(payload.password, required=False)
+
+    with connect() as con:
+        current = require_existing_user(con, normalized_username)
+
+        if normalized_username == session.get("u") and next_role is not None and next_role != current["role"]:
+            raise HTTPException(status_code=400, detail="현재 로그인한 본인 계정의 권한은 여기서 변경할 수 없습니다.")
+
+        ensure_not_last_admin(con, normalized_username, next_role=next_role, deleting=False)
+
+        fields: list[str] = []
+        values: list[Any] = []
+
+        if next_role is not None and next_role != current["role"]:
+            fields.append("role = ?")
+            values.append(next_role)
+
+        if next_password is not None:
+            fields.append("pw_hash = ?")
+            values.append(pbkdf2_hash(next_password))
+
+        if not fields:
+            return user_public_dict(current)
+
+        values.append(normalized_username)
+        con.execute(f"UPDATE users SET {', '.join(fields)} WHERE username = ?", values)
+        row = require_existing_user(con, normalized_username)
+        con.commit()
+    return user_public_dict(row)
+
+
+@app.delete("/api/users/{username}")
+def api_users_delete(request: Request, username: str):
+    ensure_ready()
+    session = require_role(request, {"admin"})
+    normalized_username = normalize_username(username)
+
+    if normalized_username == session.get("u"):
+        raise HTTPException(status_code=400, detail="현재 로그인한 계정은 삭제할 수 없습니다.")
+
+    with connect() as con:
+        require_existing_user(con, normalized_username)
+        ensure_not_last_admin(con, normalized_username, deleting=True)
+        con.execute("DELETE FROM users WHERE username = ?", (normalized_username,))
+        con.commit()
+
+    return {"deleted": True, "username": normalized_username}
 
 
 @app.get("/api/registry/check", response_model=CheckResponse)

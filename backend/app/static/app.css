@@ -32,6 +32,7 @@ body {
 
 button,
 input,
+select,
 summary {
   font: inherit;
 }
@@ -117,6 +118,7 @@ label span {
 
 input[type="text"],
 input[type="password"],
+select,
 input[type="file"] {
   width: 100%;
   min-height: 54px;
@@ -148,6 +150,13 @@ input[type="file"] {
 .capture-button:hover,
 .pick-button:hover {
   transform: translateY(-1px);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 
 .primary-btn {
@@ -564,6 +573,62 @@ input[type="file"] {
   margin-top: 18px;
 }
 
+.admin-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+.admin-section {
+  display: grid;
+  gap: 14px;
+}
+
+.user-item {
+  gap: 12px;
+}
+
+.user-title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.self-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(217, 93, 57, 0.12);
+  color: var(--brand-deep);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.user-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.badge-role-admin {
+  color: white;
+  background: linear-gradient(135deg, #223550, #101b2a);
+}
+
+.badge-role-guard {
+  color: white;
+  background: linear-gradient(135deg, var(--brand), var(--brand-deep));
+}
+
+.badge-role-viewer {
+  color: white;
+  background: var(--idle);
+}
+
 .list-board {
   display: grid;
   gap: 10px;
@@ -651,6 +716,10 @@ input[type="file"] {
   .ops-grid {
     grid-template-columns: 1fr;
   }
+
+  .admin-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 720px) {
@@ -679,13 +748,18 @@ input[type="file"] {
   .field-grid,
   .meta-list,
   .save-strip,
-  .admin-upload-row {
+  .admin-upload-row,
+  .user-form-grid {
     grid-template-columns: 1fr;
   }
 
   .import-file-item {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .user-action-row {
+    flex-direction: column;
   }
 
   .preview-shell {

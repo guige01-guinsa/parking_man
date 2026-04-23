@@ -1,4 +1,5 @@
 const rootPath = document.body.dataset.rootPath || "";
+const currentUsername = document.body.dataset.username || "";
 const apiUrl = (path) => `${rootPath}${path}`;
 
 const photoInput = document.getElementById("photo");
@@ -29,9 +30,21 @@ const registryStatus = document.getElementById("registry-status");
 const registryFileInput = document.getElementById("registry-file-input");
 const uploadRegistryBtn = document.getElementById("upload-registry-btn");
 const registryFileNote = document.getElementById("registry-file-note");
+const userList = document.getElementById("user-list");
+const userCreateForm = document.getElementById("user-create-form");
+const newUserUsernameInput = document.getElementById("new-user-username");
+const newUserPasswordInput = document.getElementById("new-user-password");
+const newUserRoleInput = document.getElementById("new-user-role");
+const userRefreshBtn = document.getElementById("user-refresh-btn");
 const geoStatus = document.getElementById("geo-status");
 const statusBanner = document.getElementById("status-banner");
 const quickMemoButtons = Array.from(document.querySelectorAll(".quick-chip"));
+
+const USER_ROLE_OPTIONS = [
+  { value: "admin", label: "관리자", badgeClass: "badge-role-admin" },
+  { value: "guard", label: "경비", badgeClass: "badge-role-guard" },
+  { value: "viewer", label: "조회", badgeClass: "badge-role-viewer" },
+];
 
 let latestRawText = "";
 let latestVerdict = null;
@@ -64,6 +77,14 @@ function badgeClass(verdict) {
   if (verdict === "TEMP") return "badge-temp";
   if (verdict === "BLOCKED" || verdict === "EXPIRED" || verdict === "UNREGISTERED") return "badge-danger";
   return "badge-idle";
+}
+
+function userRoleOption(role) {
+  return USER_ROLE_OPTIONS.find((item) => item.value === role) || USER_ROLE_OPTIONS[2];
+}
+
+function userRoleOptionsMarkup(selectedRole) {
+  return USER_ROLE_OPTIONS.map((item) => `<option value="${item.value}" ${item.value === selectedRole ? "selected" : ""}>${item.label}</option>`).join("");
 }
 
 function setStatus(message, tone = "idle") {
@@ -337,6 +358,77 @@ function renderRegistrySelection() {
   registryFileNote.textContent = `선택됨: ${files.map((file) => file.name).join(", ")}`;
 }
 
+function renderUserList(users) {
+  if (!userList) return;
+  if (!users?.length) {
+    userList.className = "list-board empty-state";
+    userList.textContent = "등록된 사용자가 없습니다.";
+    return;
+  }
+
+  userList.className = "list-board";
+  userList.innerHTML = users
+    .map((user) => {
+      const role = userRoleOption(user.role);
+      const isCurrent = user.username === currentUsername;
+      return `
+        <article class="result-item user-item" data-user-row="${escapeHtml(user.username)}" data-original-role="${escapeHtml(user.role)}">
+          <div class="result-top">
+            <div>
+              <div class="result-title user-title">
+                <span>${escapeHtml(user.username)}</span>
+                ${isCurrent ? '<span class="self-chip">내 계정</span>' : ""}
+              </div>
+              <div class="subtle">생성일 ${escapeHtml(user.created_at || "-")}</div>
+            </div>
+            <span class="result-badge ${role.badgeClass}">${escapeHtml(role.label)}</span>
+          </div>
+          <div class="field-grid user-form-grid">
+            <label>
+              <span>권한</span>
+              <select data-user-role>
+                ${userRoleOptionsMarkup(user.role)}
+              </select>
+            </label>
+            <label>
+              <span>새 비밀번호</span>
+              <input type="password" data-user-password placeholder="변경할 때만 입력">
+            </label>
+          </div>
+          <div class="user-action-row">
+            <button type="button" class="secondary-btn" data-user-save>저장</button>
+            <button type="button" class="ghost-btn" data-user-clear>입력 지우기</button>
+            <button type="button" class="danger-btn" data-user-delete ${isCurrent ? "disabled" : ""}>삭제</button>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+
+  userList.querySelectorAll("[data-user-save]").forEach((button) => {
+    button.addEventListener("click", () => saveUserRow(button).catch((error) => alert(error.message)));
+  });
+  userList.querySelectorAll("[data-user-clear]").forEach((button) => {
+    button.addEventListener("click", () => resetUserRow(button));
+  });
+  userList.querySelectorAll("[data-user-delete]").forEach((button) => {
+    button.addEventListener("click", () => deleteUserRow(button).catch((error) => alert(error.message)));
+  });
+}
+
+function resetUserRow(button) {
+  const row = button.closest("[data-user-row]");
+  if (!row) return;
+  const roleSelect = row.querySelector("[data-user-role]");
+  const passwordInput = row.querySelector("[data-user-password]");
+  if (roleSelect) {
+    roleSelect.value = row.dataset.originalRole || "viewer";
+  }
+  if (passwordInput) {
+    passwordInput.value = "";
+  }
+}
+
 async function fetchJson(url, options = {}) {
   const response = await fetch(url, options);
   if (!response.ok) {
@@ -500,6 +592,83 @@ async function uploadRegistryFiles() {
   setStatus(`${result.saved_count}개 Excel 업로드 및 동기화 완료`, "success");
 }
 
+async function loadUsers() {
+  if (!userList) return;
+  const data = await fetchJson(apiUrl("/api/users"));
+  renderUserList(data);
+}
+
+async function createUser() {
+  if (!newUserUsernameInput || !newUserPasswordInput || !newUserRoleInput) return;
+
+  const username = newUserUsernameInput.value.trim().toLowerCase();
+  const password = newUserPasswordInput.value;
+  const role = newUserRoleInput.value;
+
+  if (!username) {
+    alert("아이디를 입력해 주세요.");
+    return;
+  }
+  if (!password) {
+    alert("초기 비밀번호를 입력해 주세요.");
+    return;
+  }
+
+  setStatus(`사용자 ${username} 등록 중`, "active");
+  await fetchJson(apiUrl("/api/users"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password, role }),
+  });
+
+  newUserUsernameInput.value = "";
+  newUserPasswordInput.value = "";
+  newUserRoleInput.value = "guard";
+  await loadUsers();
+  setStatus(`사용자 ${username} 등록 완료`, "success");
+}
+
+async function saveUserRow(button) {
+  const row = button.closest("[data-user-row]");
+  if (!row) return;
+
+  const username = row.dataset.userRow || "";
+  const roleSelect = row.querySelector("[data-user-role]");
+  const passwordInput = row.querySelector("[data-user-password]");
+  const role = roleSelect?.value || row.dataset.originalRole || "viewer";
+  const password = passwordInput?.value || "";
+
+  setStatus(`사용자 ${username} 정보 저장 중`, "active");
+  await fetchJson(apiUrl(`/api/users/${encodeURIComponent(username)}`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      role,
+      password: password || null,
+    }),
+  });
+
+  await loadUsers();
+  setStatus(`사용자 ${username} 정보 저장 완료`, "success");
+}
+
+async function deleteUserRow(button) {
+  const row = button.closest("[data-user-row]");
+  if (!row) return;
+
+  const username = row.dataset.userRow || "";
+  if (!confirm(`${username} 계정을 삭제하시겠습니까?`)) {
+    return;
+  }
+
+  setStatus(`사용자 ${username} 삭제 중`, "active");
+  await fetchJson(apiUrl(`/api/users/${encodeURIComponent(username)}`), {
+    method: "DELETE",
+  });
+  await loadUsers();
+  setStatus(`사용자 ${username} 삭제 완료`, "success");
+}
+
 function loadGeolocation() {
   if (!navigator.geolocation) {
     geoStatus.textContent = "이 브라우저는 위치 기능을 지원하지 않습니다.";
@@ -559,12 +728,17 @@ matchNextBtn?.addEventListener("click", () => shiftCheckMatch(1));
 document.getElementById("search-btn")?.addEventListener("click", () => searchRegistry().catch((error) => alert(error.message)));
 document.getElementById("sync-btn")?.addEventListener("click", () => syncRegistry().catch((error) => alert(error.message)));
 uploadRegistryBtn?.addEventListener("click", () => uploadRegistryFiles().catch((error) => alert(error.message)));
+userRefreshBtn?.addEventListener("click", () => loadUsers().catch((error) => alert(error.message)));
 document.getElementById("geo-btn")?.addEventListener("click", loadGeolocation);
 document.getElementById("search-query")?.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
     searchRegistry().catch((error) => alert(error.message));
   }
+});
+userCreateForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  createUser().catch((error) => alert(error.message));
 });
 
 hydrateFields();
@@ -579,3 +753,4 @@ loadRecent().catch((error) => {
   recentResults.textContent = error.message;
 });
 loadRegistryStatus().catch(() => {});
+loadUsers().catch(() => {});

@@ -52,8 +52,11 @@ def seed_users() -> None:
         ("viewer", pbkdf2_hash("viewer1234"), "viewer"),
     ]
     with connect() as con:
+        existing = con.execute("SELECT COUNT(*) AS cnt FROM users").fetchone()
+        if int(existing["cnt"]) > 0:
+            return
         con.executemany(
-            "INSERT OR IGNORE INTO users(username, pw_hash, role) VALUES (?, ?, ?)",
+            "INSERT INTO users(username, pw_hash, role) VALUES (?, ?, ?)",
             demo_users,
         )
         con.commit()
