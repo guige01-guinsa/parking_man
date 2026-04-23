@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from .auth import COOKIE_NAME, make_session, pbkdf2_verify, read_session, require_role
 from .db import DEFAULT_SITE_CODE, connect, init_db, maybe_seed_demo, normalize_site_code, seed_users
-from .excel_import import sync_registry_from_dir
+from .excel_import import describe_excel_files, store_registry_upload, sync_registry_from_dir
 from .ocr_learning import get_learning_candidates, get_learning_status, parse_candidates_json, record_ocr_feedback
 from .ocr import scan_plate_image
 from .plates import PlateVerdict, evaluate_vehicle_row, normalize_plate
@@ -334,6 +334,7 @@ def api_registry_status(request: Request):
         "site_code": site_code,
         "vehicle_count": vehicle_count,
         "import_dir": str(IMPORT_DIR),
+        "import_files": describe_excel_files(IMPORT_DIR),
         "ocr_provider": os.getenv("PARKING_OCR_PROVIDER", "tesseract"),
         "ocr_learning": get_learning_status(site_code),
         "last_sync": dict(last_run) if last_run else None,
@@ -350,6 +351,51 @@ def api_registry_sync(request: Request):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/registry/upload")
+async def api_registry_upload(request: Request, files: list[UploadFile] = File(...)):
+    ensure_ready()
+    require_role(request, {"admin"})
+
+    if not files:
+        raise HTTPException(status_code=400, detail="업로드할 Excel 파일을 선택해 주세요.")
+
+    pending: list[tuple[str | None, bytes]] = []
+    for item in files:
+        payload = await item.read()
+        pending.append((item.filename, payload))
+
+    saved_names: set[str] = set()
+    uploaded_paths: list[Path] = []
+    try:
+        for filename, payload in pending:
+            uploaded = store_registry_upload(IMPORT_DIR, filename, payload, saved_names)
+            uploaded_paths.append(uploaded)
+            saved_names.add(uploaded.name)
+        sync_result = sync_registry_from_dir(IMPORT_DIR, current_site_code(request))
+    except ValueError as exc:
+        for path in uploaded_paths:
+            if path.exists():
+                path.unlink()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        for path in uploaded_paths:
+            if path.exists():
+                path.unlink()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        for path in uploaded_paths:
+            if path.exists():
+                path.unlink()
+        raise HTTPException(status_code=400, detail=f"Excel 파일 처리 중 오류가 발생했습니다: {exc}") from exc
+
+    return {
+        "saved_count": len(uploaded_paths),
+        "saved_files": [path.name for path in uploaded_paths],
+        "import_dir": str(IMPORT_DIR),
+        "sync": sync_result,
+    }
 
 
 @app.post("/api/ocr/scan")

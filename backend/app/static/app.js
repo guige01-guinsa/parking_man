@@ -21,6 +21,9 @@ const verdictMeta = document.getElementById("verdict-meta");
 const recentResults = document.getElementById("recent-results");
 const searchResults = document.getElementById("search-results");
 const registryStatus = document.getElementById("registry-status");
+const registryFileInput = document.getElementById("registry-file-input");
+const uploadRegistryBtn = document.getElementById("upload-registry-btn");
+const registryFileNote = document.getElementById("registry-file-note");
 const geoStatus = document.getElementById("geo-status");
 const statusBanner = document.getElementById("status-banner");
 const quickMemoButtons = Array.from(document.querySelectorAll(".quick-chip"));
@@ -214,6 +217,12 @@ function renderRegistryStatus(status) {
   const last = status.last_sync;
   const learning = status.ocr_learning || {};
   const lastFeedback = learning.last_feedback;
+  const importFiles = Array.isArray(status.import_files) ? status.import_files : [];
+  const fileMarkup = importFiles.length
+    ? importFiles
+        .map((file) => `<div class="import-file-item"><strong>${escapeHtml(file.name)}</strong><span>${escapeHtml(file.modified_at || "-")} · ${escapeHtml(file.size || 0)} bytes</span></div>`)
+        .join("")
+    : '<div class="subtle">아직 업로드된 Excel 파일이 없습니다.</div>';
   registryStatus.innerHTML = `
     <div class="result-item">
       <div class="result-top">
@@ -225,7 +234,18 @@ function renderRegistryStatus(status) {
       <div class="subtle">AI 학습 누적: ${escapeHtml(learning.total_feedback || 0)}건 / 사용자 교정: ${escapeHtml(learning.corrected_feedback || 0)}건</div>
       <div class="subtle">${lastFeedback ? `최근 학습: ${escapeHtml(lastFeedback.suggested_plate || "-")} → ${escapeHtml(lastFeedback.corrected_plate || "-")} (${escapeHtml(lastFeedback.created_at || "-")})` : "아직 OCR 학습 이력이 없습니다."}</div>
     </div>
+    <div class="import-file-list">${fileMarkup}</div>
   `;
+}
+
+function renderRegistrySelection() {
+  if (!registryFileInput || !registryFileNote) return;
+  const files = Array.from(registryFileInput.files || []);
+  if (!files.length) {
+    registryFileNote.textContent = "선택된 파일이 없습니다.";
+    return;
+  }
+  registryFileNote.textContent = `선택됨: ${files.map((file) => file.name).join(", ")}`;
 }
 
 async function fetchJson(url, options = {}) {
@@ -367,6 +387,26 @@ async function syncRegistry() {
   setStatus("등록차량 다시 읽기 완료", "success");
 }
 
+async function uploadRegistryFiles() {
+  if (!registryFileInput?.files?.length) {
+    alert("업로드할 Excel 파일을 먼저 선택해 주세요.");
+    return;
+  }
+
+  setStatus("Excel 업로드 및 동기화 중", "active");
+  const formData = new FormData();
+  Array.from(registryFileInput.files).forEach((file) => {
+    formData.append("files", file);
+  });
+
+  const result = await fetchJson(apiUrl("/api/registry/upload"), { method: "POST", body: formData });
+  registryFileInput.value = "";
+  renderRegistrySelection();
+  await loadRegistryStatus();
+  await searchRegistry();
+  setStatus(`${result.saved_count}개 Excel 업로드 및 동기화 완료`, "success");
+}
+
 function loadGeolocation() {
   if (!navigator.geolocation) {
     geoStatus.textContent = "이 브라우저는 위치 기능을 지원하지 않습니다.";
@@ -397,6 +437,8 @@ photoInput?.addEventListener("change", () => {
   }
 });
 
+registryFileInput?.addEventListener("change", renderRegistrySelection);
+
 plateInput?.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
@@ -421,6 +463,7 @@ saveBtn?.addEventListener("click", () => saveEvent().catch((error) => alert(erro
 resetBtn?.addEventListener("click", resetWorkflow);
 document.getElementById("search-btn")?.addEventListener("click", () => searchRegistry().catch((error) => alert(error.message)));
 document.getElementById("sync-btn")?.addEventListener("click", () => syncRegistry().catch((error) => alert(error.message)));
+uploadRegistryBtn?.addEventListener("click", () => uploadRegistryFiles().catch((error) => alert(error.message)));
 document.getElementById("geo-btn")?.addEventListener("click", loadGeolocation);
 document.getElementById("search-query")?.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
@@ -431,6 +474,7 @@ document.getElementById("search-query")?.addEventListener("keydown", (event) => 
 
 hydrateFields();
 syncQuickMemoState();
+renderRegistrySelection();
 renderCandidates([]);
 renderIdleVerdict();
 setStatus("촬영 대기 중", "idle");

@@ -118,6 +118,61 @@ def list_excel_files(source_dir: Path) -> list[Path]:
     )
 
 
+def build_safe_excel_filename(filename: str | None, existing_names: set[str] | None = None) -> str:
+    raw_name = Path(str(filename or "")).name.strip()
+    if not raw_name:
+        raise ValueError("업로드 파일 이름이 비어 있습니다.")
+
+    stem = re.sub(r"[^\w가-힣.-]+", "-", Path(raw_name).stem).strip("-.")
+    suffix = Path(raw_name).suffix.lower()
+    if suffix not in EXCEL_SUFFIXES:
+        raise ValueError("Excel 파일은 .xlsx 또는 .xlsm 형식만 업로드할 수 있습니다.")
+    if not stem:
+        stem = "registry"
+
+    candidate = f"{stem}{suffix}"
+    existing_names = existing_names or set()
+    counter = 2
+    while candidate in existing_names:
+        candidate = f"{stem}-{counter}{suffix}"
+        counter += 1
+    return candidate
+
+
+def store_registry_upload(source_dir: str | os.PathLike[str], filename: str | None, data: bytes, existing_names: set[str] | None = None) -> Path:
+    if not data:
+        raise ValueError("비어 있는 파일은 업로드할 수 없습니다.")
+
+    source_path = Path(source_dir)
+    source_path.mkdir(parents=True, exist_ok=True)
+    reserved_names = {path.name for path in list_excel_files(source_path)}
+    reserved_names.update(existing_names or set())
+
+    safe_name = build_safe_excel_filename(filename, reserved_names)
+    target = source_path / safe_name
+    target.write_bytes(data)
+    return target
+
+
+def describe_excel_files(source_dir: str | os.PathLike[str], limit: int = 20) -> list[dict[str, Any]]:
+    source_path = Path(source_dir)
+    if not source_path.exists():
+        return []
+
+    files = sorted(list_excel_files(source_path), key=lambda item: item.stat().st_mtime, reverse=True)
+    rows: list[dict[str, Any]] = []
+    for path in files[: max(limit, 0)]:
+        stat = path.stat()
+        rows.append(
+            {
+                "name": path.name,
+                "size": stat.st_size,
+                "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+            }
+        )
+    return rows
+
+
 def record_import_run(site_code: str, source_dir: Path, files_count: int, rows_count: int, status: str, message: str) -> None:
     with connect() as con:
         con.execute(

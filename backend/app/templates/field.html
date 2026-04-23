@@ -191,6 +191,20 @@
         </div>
         <button id="sync-btn" type="button" class="primary-btn">지정 폴더 다시 읽기</button>
       </div>
+      <div class="admin-upload-box">
+        <div>
+          <p class="eyebrow">Excel Upload</p>
+          <p class="subtle">관리사무소 Excel 파일을 여기서 바로 올리면 서버 폴더에 저장한 뒤 즉시 동기화합니다.</p>
+        </div>
+        <div class="admin-upload-row">
+          <label class="capture-button admin-upload-label">
+            <span>Excel 선택</span>
+            <input id="registry-file-input" type="file" accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel.sheet.macroEnabled.12" multiple>
+          </label>
+          <button id="upload-registry-btn" type="button" class="secondary-btn">업로드 후 동기화</button>
+        </div>
+        <div id="registry-file-note" class="subtle">선택된 파일이 없습니다.</div>
+      </div>
       <div id="registry-status" class="status-board">동기화 상태를 불러오는 중입니다.</div>
     </section>
     {% endif %}

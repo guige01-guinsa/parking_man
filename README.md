@@ -46,6 +46,10 @@
 - `만료일`
 - `비고`
 
+샘플 파일:
+
+- `examples/registry_sample.xlsx`
+
 ## 더 좋은 운영 방법
 
 - Excel은 원본 유지, 시스템은 주기 동기화: 실시간 조회는 DB에서 수행
@@ -60,6 +64,7 @@
 - 운영 배포 시에는 `backend/.env.production.example`를 기준으로 환경변수를 구성합니다.
 - Docker 배포는 개발용 `docker-compose.yml`, 운영용 `docker-compose.prod.yml`을 사용합니다.
 - Excel 원본은 `backend/imports/`에 두고, 관리자 화면에서 다시 읽기를 실행하면 됩니다.
+- 운영 중에는 관리자 화면에서 Excel 파일을 직접 업로드해 즉시 동기화할 수 있습니다.
 
 ## GitHub 기반 운영 배포
 
@@ -132,3 +137,4 @@
 
 - Render의 Persistent Disk는 유료 웹서비스에서만 사용할 수 있으므로 `render.yaml`은 `starter` 플랜 기준으로 작성했습니다.
 - 서비스 생성 후 `Shell` 또는 파일 업로드 기능으로 Excel 원본을 `/data/imports` 아래에 넣어야 등록차량 동기화가 가능합니다.
+- 현재는 Render Shell 없이도 관리자 화면에서 Excel을 업로드하면 `/data/imports`로 저장 후 즉시 동기화됩니다.

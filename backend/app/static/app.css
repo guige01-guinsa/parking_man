@@ -396,12 +396,50 @@ input[type="file"] {
 .list-board,
 .ocr-raw,
 .geo-box,
-.ocr-details {
+.ocr-details,
+.admin-upload-box {
   margin-top: 16px;
   padding: 16px;
   border-radius: 20px;
   background: rgba(255, 255, 255, 0.64);
   border: 1px solid rgba(31, 36, 40, 0.08);
+}
+
+.admin-upload-box {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-upload-row {
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  gap: 12px;
+}
+
+.admin-upload-label {
+  min-width: 0;
+}
+
+.import-file-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.import-file-item {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(31, 36, 40, 0.08);
+}
+
+.import-file-item span {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .ocr-details summary {
@@ -603,8 +641,14 @@ input[type="file"] {
   .capture-actions,
   .field-grid,
   .meta-list,
-  .save-strip {
+  .save-strip,
+  .admin-upload-row {
     grid-template-columns: 1fr;
+  }
+
+  .import-file-item {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .preview-shell {

@@ -1,7 +1,9 @@
+import tempfile
 import unittest
 from datetime import date
+from pathlib import Path
 
-from app.excel_import import resolve_header_field
+from app.excel_import import build_safe_excel_filename, resolve_header_field, store_registry_upload
 from app.plates import evaluate_vehicle_row, extract_plate_candidates, normalize_plate, normalize_status
 
 
@@ -41,6 +43,14 @@ class ExcelHeaderTests(unittest.TestCase):
         self.assertEqual(resolve_header_field("차량번호"), "plate")
         self.assertEqual(resolve_header_field("동호수"), "unit")
         self.assertEqual(resolve_header_field("차주"), "owner_name")
+
+    def test_build_safe_excel_filename(self):
+        self.assertEqual(build_safe_excel_filename("../차량 목록.xlsx"), "차량-목록.xlsx")
+
+    def test_store_registry_upload_rejects_invalid_suffix(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaises(ValueError):
+                store_registry_upload(Path(temp_dir), "registry.csv", b"bad-data")
 
 
 if __name__ == "__main__":
