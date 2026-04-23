@@ -469,6 +469,42 @@ input[type="file"] {
   letter-spacing: -0.03em;
 }
 
+.verdict-match-nav {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.match-nav-btn {
+  min-width: 44px;
+  min-height: 44px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 999px;
+  color: white;
+  background: rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.match-nav-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.match-counter {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  font-weight: 800;
+}
+
+.match-note {
+  margin: 0;
+}
+
 .verdict-card .subtle {
   color: rgba(255, 255, 255, 0.84);
 }
@@ -627,7 +663,8 @@ input[type="file"] {
   .hero-layout,
   .panel-head,
   .search-row,
-  .geo-head {
+  .geo-head,
+  .verdict-match-nav {
     flex-direction: column;
     align-items: stretch;
   }

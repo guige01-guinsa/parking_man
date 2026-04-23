@@ -143,7 +143,13 @@
           <div id="verdict-card" class="verdict-card verdict-idle">
             <p class="verdict-label">대기 중</p>
             <h4 id="verdict-title">차량을 촬영하거나 번호를 입력해 주세요.</h4>
+            <div id="verdict-match-nav" class="verdict-match-nav" hidden>
+              <button id="match-prev-btn" type="button" class="match-nav-btn" aria-label="이전 차량">&#8592;</button>
+              <div id="match-counter" class="match-counter">1 / 1</div>
+              <button id="match-next-btn" type="button" class="match-nav-btn" aria-label="다음 차량">&#8594;</button>
+            </div>
             <p id="verdict-detail" class="subtle">정상 등록, 임시 등록, 기간 만료, 차단 여부를 즉시 확인합니다.</p>
+            <p id="verdict-match-note" class="subtle match-note" hidden></p>
             <dl id="verdict-meta" class="meta-list"></dl>
           </div>
 

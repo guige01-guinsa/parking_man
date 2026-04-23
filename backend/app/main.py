@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import threading
 import uuid
@@ -11,7 +12,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .auth import COOKIE_NAME, make_session, pbkdf2_verify, read_session, require_role
 from .db import DEFAULT_SITE_CODE, connect, init_db, maybe_seed_demo, normalize_site_code, seed_users
@@ -44,8 +45,7 @@ _ready_lock = threading.Lock()
 _app_ready = False
 
 
-class CheckResponse(BaseModel):
-    site_code: str
+class CheckMatch(BaseModel):
     plate: str
     verdict: str
     message: str
@@ -54,6 +54,15 @@ class CheckResponse(BaseModel):
     status: str | None = None
     valid_from: str | None = None
     valid_to: str | None = None
+
+
+class CheckResponse(CheckMatch):
+    site_code: str
+    requested_plate: str | None = None
+    match_mode: str = "exact"
+    match_count: int = 1
+    match_index: int = 0
+    matches: list[CheckMatch] = Field(default_factory=list)
 
 
 def app_url(path: str) -> str:
@@ -98,6 +107,41 @@ def lookup_vehicle(site_code: str, plate: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def lookup_vehicles_by_suffix(site_code: str, suffix: str) -> list[dict[str, Any]]:
+    ensure_ready()
+    with connect() as con:
+        rows = con.execute(
+            """
+            SELECT *
+            FROM vehicles
+            WHERE site_code = ? AND plate LIKE ?
+            ORDER BY plate
+            """,
+            (site_code, f"%{suffix}"),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def is_suffix_plate_query(value: str) -> bool:
+    raw = re.sub(r"\s+", "", str(value or ""))
+    return len(raw) == 4 and raw.isdigit()
+
+
+def build_check_match(plate: str, vehicle: dict[str, Any] | None) -> CheckMatch:
+    verdict: PlateVerdict = evaluate_vehicle_row(vehicle)
+    normalized = normalize_plate(plate)
+    return CheckMatch(
+        plate=normalized,
+        verdict=verdict.verdict,
+        message=verdict.message,
+        unit=verdict.unit,
+        owner_name=verdict.owner_name,
+        status=verdict.status,
+        valid_from=verdict.valid_from,
+        valid_to=verdict.valid_to,
+    )
+
+
 def choose_best_scan_candidate(site_code: str, raw_ocr_text: str | None, manual_plate: str | None, candidates: list[str]) -> tuple[str | None, list[str]]:
     manual_normalized = normalize_plate(manual_plate)
     learned_candidates, learning_scores = get_learning_candidates(site_code, raw_ocr_text, candidates)
@@ -140,21 +184,54 @@ def choose_best_scan_candidate(site_code: str, raw_ocr_text: str | None, manual_
 
 
 def build_check_response(site_code: str, plate: str) -> CheckResponse:
-    normalized = normalize_plate(plate)
-    if not normalized:
+    requested = str(plate or "").strip()
+    normalized = normalize_plate(requested)
+    if not normalized and not is_suffix_plate_query(requested):
         raise HTTPException(status_code=400, detail="차량번호를 입력해 주세요.")
-    vehicle = lookup_vehicle(site_code, normalized)
-    verdict: PlateVerdict = evaluate_vehicle_row(vehicle)
+
+    if is_suffix_plate_query(requested):
+        suffix_matches = [
+            build_check_match(row["plate"], row)
+            for row in lookup_vehicles_by_suffix(site_code, requested)
+        ]
+        suffix_matches.sort(
+            key=lambda item: (
+                {"OK": 0, "TEMP": 1, "EXPIRED": 2, "BLOCKED": 3, "UNREGISTERED": 4}.get(item.verdict, 9),
+                item.plate,
+            )
+        )
+        if not suffix_matches:
+            unmatched = build_check_match(requested, None)
+            return CheckResponse(
+                site_code=site_code,
+                requested_plate=requested,
+                match_mode="suffix",
+                match_count=0,
+                match_index=0,
+                matches=[],
+                **unmatched.model_dump(),
+            )
+
+        primary = suffix_matches[0]
+        return CheckResponse(
+            site_code=site_code,
+            requested_plate=requested,
+            match_mode="suffix",
+            match_count=len(suffix_matches),
+            match_index=0,
+            matches=suffix_matches,
+            **primary.model_dump(),
+        )
+
+    match = build_check_match(normalized, lookup_vehicle(site_code, normalized))
     return CheckResponse(
         site_code=site_code,
-        plate=normalized,
-        verdict=verdict.verdict,
-        message=verdict.message,
-        unit=verdict.unit,
-        owner_name=verdict.owner_name,
-        status=verdict.status,
-        valid_from=verdict.valid_from,
-        valid_to=verdict.valid_to,
+        requested_plate=requested or normalized,
+        match_mode="exact",
+        match_count=1,
+        match_index=0,
+        matches=[],
+        **match.model_dump(),
     )
 
 

@@ -18,6 +18,11 @@ const verdictCard = document.getElementById("verdict-card");
 const verdictTitle = document.getElementById("verdict-title");
 const verdictDetail = document.getElementById("verdict-detail");
 const verdictMeta = document.getElementById("verdict-meta");
+const verdictMatchNav = document.getElementById("verdict-match-nav");
+const verdictMatchNote = document.getElementById("verdict-match-note");
+const matchPrevBtn = document.getElementById("match-prev-btn");
+const matchNextBtn = document.getElementById("match-next-btn");
+const matchCounter = document.getElementById("match-counter");
 const recentResults = document.getElementById("recent-results");
 const searchResults = document.getElementById("search-results");
 const registryStatus = document.getElementById("registry-status");
@@ -34,6 +39,9 @@ let currentGeo = { lat: null, lng: null };
 let objectUrl = "";
 let latestOcrBestPlate = "";
 let latestOcrCandidates = [];
+let currentCheckMatches = [];
+let currentCheckIndex = 0;
+let currentCheckRequestedPlate = "";
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -102,12 +110,54 @@ function renderIdleVerdict() {
   latestVerdict = null;
   latestOcrBestPlate = "";
   latestOcrCandidates = [];
+  currentCheckMatches = [];
+  currentCheckIndex = 0;
+  currentCheckRequestedPlate = "";
   verdictCard.className = "verdict-card verdict-idle";
   verdictCard.querySelector(".verdict-label").textContent = "대기 중";
   verdictTitle.textContent = "차량을 촬영하거나 번호를 입력해 주세요.";
   verdictDetail.textContent = "정상 등록, 임시 등록, 기간 만료, 차단 여부를 즉시 확인합니다.";
+  verdictMatchNav.hidden = true;
+  verdictMatchNote.hidden = true;
+  verdictMatchNote.textContent = "";
   verdictMeta.innerHTML = "";
   saveBtn.textContent = "단속 기록 저장";
+}
+
+function toMatchItem(data) {
+  return {
+    plate: data.plate || "",
+    verdict: data.verdict || "UNREGISTERED",
+    message: data.message || "미등록 차량",
+    unit: data.unit || null,
+    owner_name: data.owner_name || null,
+    status: data.status || null,
+    valid_from: data.valid_from || null,
+    valid_to: data.valid_to || null,
+  };
+}
+
+function renderMatchNavigator(data) {
+  const matchCount = Number(data.match_count || currentCheckMatches.length || 0);
+  const isSuffix = data.match_mode === "suffix";
+  const hasMultiple = isSuffix && matchCount > 1;
+
+  verdictMatchNav.hidden = !hasMultiple;
+  verdictMatchNote.hidden = !isSuffix;
+
+  if (hasMultiple) {
+    matchCounter.textContent = `${currentCheckIndex + 1} / ${matchCount}`;
+    verdictMatchNote.textContent = `뒤 4자리 ${currentCheckRequestedPlate || data.requested_plate || "-"} 일치 차량 ${matchCount}대입니다. 화살표로 순서대로 확인해 주세요.`;
+  } else if (isSuffix && matchCount === 1) {
+    verdictMatchNote.textContent = `뒤 4자리 ${currentCheckRequestedPlate || data.requested_plate || "-"} 일치 차량 1대를 찾았습니다.`;
+  } else if (isSuffix) {
+    verdictMatchNote.textContent = `뒤 4자리 ${currentCheckRequestedPlate || data.requested_plate || "-"}와 일치하는 등록차량이 없습니다.`;
+  } else {
+    verdictMatchNote.textContent = "";
+  }
+
+  matchPrevBtn.disabled = !hasMultiple;
+  matchNextBtn.disabled = !hasMultiple;
 }
 
 function renderVerdict(data) {
@@ -136,6 +186,45 @@ function renderVerdict(data) {
   } else {
     saveBtn.textContent = "단속 기록 저장";
   }
+
+  renderMatchNavigator(data);
+}
+
+function applyCheckResponse(data) {
+  const rawMatches = Array.isArray(data.matches) ? data.matches : [];
+  currentCheckRequestedPlate = data.requested_plate || plateInput.value.trim();
+  currentCheckMatches = rawMatches.length ? rawMatches.map(toMatchItem) : [toMatchItem(data)];
+  currentCheckIndex = Math.min(Math.max(Number(data.match_index || 0), 0), Math.max(currentCheckMatches.length - 1, 0));
+
+  const active = currentCheckMatches[currentCheckIndex];
+  if (active?.plate && data.match_count) {
+    plateInput.value = active.plate;
+  }
+  renderVerdict({
+    ...data,
+    ...active,
+  });
+}
+
+function shiftCheckMatch(step) {
+  if (currentCheckMatches.length < 2) {
+    return;
+  }
+  currentCheckIndex = (currentCheckIndex + step + currentCheckMatches.length) % currentCheckMatches.length;
+  const active = currentCheckMatches[currentCheckIndex];
+  if (!active) {
+    return;
+  }
+  plateInput.value = active.plate || plateInput.value;
+  renderVerdict({
+    ...latestVerdict,
+    ...active,
+    requested_plate: currentCheckRequestedPlate,
+    match_mode: "suffix",
+    match_count: currentCheckMatches.length,
+    match_index: currentCheckIndex,
+  });
+  setStatus(`${plateInput.value} ${currentCheckIndex + 1}/${currentCheckMatches.length} 확인 중`, active.verdict === "OK" ? "success" : active.verdict === "TEMP" ? "warn" : "danger");
 }
 
 function renderCandidates(items) {
@@ -271,8 +360,12 @@ async function runCheck() {
   }
   setStatus("등록차량 DB 조회 중", "active");
   const data = await fetchJson(`${apiUrl("/api/registry/check")}?plate=${encodeURIComponent(plate)}`);
-  renderVerdict(data);
-  setStatus(`${data.plate} 조회 완료`, data.verdict === "OK" ? "success" : data.verdict === "TEMP" ? "warn" : "danger");
+  applyCheckResponse(data);
+  if (data.match_mode === "suffix" && data.match_count > 1) {
+    setStatus(`뒤 4자리 ${data.requested_plate} 일치 차량 ${data.match_count}대`, "warn");
+  } else {
+    setStatus(`${data.plate} 조회 완료`, data.verdict === "OK" ? "success" : data.verdict === "TEMP" ? "warn" : "danger");
+  }
 }
 
 async function runScan() {
@@ -461,6 +554,8 @@ scanBtn?.addEventListener("click", () => runScan().catch((error) => alert(error.
 checkBtn?.addEventListener("click", () => runCheck().catch((error) => alert(error.message)));
 saveBtn?.addEventListener("click", () => saveEvent().catch((error) => alert(error.message)));
 resetBtn?.addEventListener("click", resetWorkflow);
+matchPrevBtn?.addEventListener("click", () => shiftCheckMatch(-1));
+matchNextBtn?.addEventListener("click", () => shiftCheckMatch(1));
 document.getElementById("search-btn")?.addEventListener("click", () => searchRegistry().catch((error) => alert(error.message)));
 document.getElementById("sync-btn")?.addEventListener("click", () => syncRegistry().catch((error) => alert(error.message)));
 uploadRegistryBtn?.addEventListener("click", () => uploadRegistryFiles().catch((error) => alert(error.message)));
