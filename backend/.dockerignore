@@ -1,0 +1,14 @@
+.venv
+.env
+.env.production
+app/data
+app/uploads
+imports
+tessdata
+tests
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3

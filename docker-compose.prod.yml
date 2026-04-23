@@ -1,0 +1,13 @@
+services:
+  parking-api:
+    image: ghcr.io/guige01-guinsa/parking_man:${PARKING_IMAGE_TAG:-latest}
+    container_name: apartment-parking-api
+    env_file:
+      - ./backend/.env.production
+    ports:
+      - "${PARKING_HOST_PORT:-8011}:8011"
+    volumes:
+      - ./storage/data:/data
+      - ./storage/uploads:/uploads
+      - ./storage/imports:/imports
+    restart: unless-stopped

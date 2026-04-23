@@ -14,7 +14,7 @@
 - OCR: Tesseract OCR (`kor+eng`)
 - Vehicle source: 지정 폴더의 `xlsx` / `xlsm`
 - Frontend: 모바일 우선 반응형 웹 UI
-- 배포: Windows PowerShell 실행 또는 Docker
+- 배포: Docker + GitHub Actions + GHCR
 
 ## 빠른 시작
 
@@ -58,5 +58,56 @@
 ## 운영 메모
 
 - 운영 배포 시에는 `backend/.env.production.example`를 기준으로 환경변수를 구성합니다.
-- Docker 배포는 루트의 `docker-compose.yml`을 사용합니다.
+- Docker 배포는 개발용 `docker-compose.yml`, 운영용 `docker-compose.prod.yml`을 사용합니다.
 - Excel 원본은 `backend/imports/`에 두고, 관리자 화면에서 다시 읽기를 실행하면 됩니다.
+
+## GitHub 기반 운영 배포
+
+현재 저장소는 GitHub Actions로 테스트와 컨테이너 빌드를 수행하고, `main` 브랜치에 푸시되면 GHCR(`ghcr.io/guige01-guinsa/parking_man`)로 이미지를 발행하도록 구성되어 있습니다.
+
+추가된 파일:
+
+- `.github/workflows/ci.yml`
+- `.github/workflows/publish-image.yml`
+- `docker-compose.prod.yml`
+- `deploy.sh`
+- `deploy.ps1`
+
+배포 흐름:
+
+1. `main`에 푸시
+2. GitHub Actions가 테스트 실행
+3. Docker 이미지를 `ghcr.io/guige01-guinsa/parking_man:latest` 및 `sha-*` 태그로 발행
+4. 서버에서 `docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d`
+
+### 서버 배포 절차
+
+1. 서버에 저장소 클론
+2. 운영 환경파일 생성
+   - `cp backend/.env.production.example backend/.env.production`
+3. 필요시 `backend/.env.production` 수정
+   - `PARKING_SECRET_KEY`
+   - `PARKING_HOST_PORT`는 compose 실행 전에 셸 환경변수로 지정 가능
+4. 운영용 디렉터리 생성
+   - `storage/data`
+   - `storage/uploads`
+   - `storage/imports`
+5. 배포 실행
+   - Linux/macOS:
+     - `docker compose -f docker-compose.prod.yml pull`
+     - `docker compose -f docker-compose.prod.yml up -d`
+   - Linux/macOS 한 줄 실행:
+     - `sh ./deploy.sh`
+   - Windows PowerShell:
+     - `pwsh -File .\deploy.ps1`
+
+### 서버에서 Excel 원본 넣는 위치
+
+- `storage/imports/`
+
+이 경로에 Excel 파일을 넣고 관리자 화면에서 다시 읽기를 누르면 등록차량 DB가 갱신됩니다.
+
+### 주의
+
+- 저장소가 `private`이고 GHCR 패키지도 비공개면 서버에서 먼저 `docker login ghcr.io`가 필요합니다.
+- 저장소가 `public`이면 GHCR 이미지를 공개 패키지로 두는 편이 운영이 단순합니다.
