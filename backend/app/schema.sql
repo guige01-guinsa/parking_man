@@ -46,6 +46,19 @@ CREATE TABLE IF NOT EXISTS enforcement_events (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS ocr_feedback (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  site_code TEXT NOT NULL,
+  raw_key TEXT,
+  raw_ocr_text TEXT,
+  suggested_plate TEXT,
+  corrected_plate TEXT NOT NULL,
+  accepted INTEGER NOT NULL DEFAULT 0,
+  candidates_json TEXT,
+  photo_path TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS users (
   username TEXT PRIMARY KEY,
   pw_hash TEXT NOT NULL,
@@ -56,4 +69,8 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_vehicles_site_plate ON vehicles(site_code, plate);
 CREATE INDEX IF NOT EXISTS idx_enforcement_site_created_at ON enforcement_events(site_code, created_at);
 CREATE INDEX IF NOT EXISTS idx_import_runs_site_imported_at ON import_runs(site_code, imported_at);
+CREATE INDEX IF NOT EXISTS idx_ocr_feedback_site_created_at ON ocr_feedback(site_code, created_at);
+CREATE INDEX IF NOT EXISTS idx_ocr_feedback_site_raw_key ON ocr_feedback(site_code, raw_key);
+CREATE INDEX IF NOT EXISTS idx_ocr_feedback_site_suggested ON ocr_feedback(site_code, suggested_plate);
+CREATE INDEX IF NOT EXISTS idx_ocr_feedback_site_corrected ON ocr_feedback(site_code, corrected_plate);
 

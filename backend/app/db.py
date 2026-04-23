@@ -8,6 +8,21 @@ DEFAULT_SITE_CODE = (os.getenv("PARKING_DEFAULT_SITE_CODE", "APT1100").strip().u
 SEED_DEMO = os.getenv("PARKING_SEED_DEMO", "1").strip().lower() in {"1", "true", "yes", "on"}
 
 
+class ClosingConnection(sqlite3.Connection):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if exc_type is None:
+                self.commit()
+            else:
+                self.rollback()
+        finally:
+            self.close()
+        return False
+
+
 def normalize_site_code(value: str | None) -> str:
     text = str(value or "").strip().upper()
     return text or DEFAULT_SITE_CODE
@@ -15,7 +30,7 @@ def normalize_site_code(value: str | None) -> str:
 
 def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(DB_PATH)
+    con = sqlite3.connect(DB_PATH, factory=ClosingConnection)
     con.row_factory = sqlite3.Row
     return con
 

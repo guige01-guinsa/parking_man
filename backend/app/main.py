@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from .auth import COOKIE_NAME, make_session, pbkdf2_verify, read_session, require_role
 from .db import DEFAULT_SITE_CODE, connect, init_db, maybe_seed_demo, normalize_site_code, seed_users
 from .excel_import import sync_registry_from_dir
+from .ocr_learning import get_learning_candidates, get_learning_status, parse_candidates_json, record_ocr_feedback
 from .ocr import scan_plate_image
 from .plates import PlateVerdict, evaluate_vehicle_row, normalize_plate
 
@@ -95,6 +96,47 @@ def lookup_vehicle(site_code: str, plate: str) -> dict[str, Any] | None:
             (site_code, normalized),
         ).fetchone()
     return dict(row) if row else None
+
+
+def choose_best_scan_candidate(site_code: str, raw_ocr_text: str | None, manual_plate: str | None, candidates: list[str]) -> tuple[str | None, list[str]]:
+    manual_normalized = normalize_plate(manual_plate)
+    learned_candidates, learning_scores = get_learning_candidates(site_code, raw_ocr_text, candidates)
+    source_candidates: list[str] = []
+    if manual_normalized:
+        source_candidates.append(manual_normalized)
+    source_candidates.extend(learned_candidates)
+    source_candidates.extend(candidates)
+
+    normalized_candidates: list[str] = []
+    seen: set[str] = set()
+
+    for candidate in source_candidates:
+        normalized = normalize_plate(candidate)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        normalized_candidates.append(normalized)
+
+    if not normalized_candidates:
+        return None, []
+
+    ranked: list[tuple[str, float]] = []
+    for index, candidate in enumerate(normalized_candidates):
+        vehicle = lookup_vehicle(site_code, candidate)
+        verdict = evaluate_vehicle_row(vehicle)
+        score = learning_scores.get(candidate, 0.0)
+        if candidate == manual_normalized:
+            score += 1000.0
+        if verdict.verdict != "UNREGISTERED":
+            score += 220.0
+            if verdict.verdict == "OK":
+                score += 40.0
+        score += max(0.0, 30.0 - (index * 2.0))
+        ranked.append((candidate, score))
+
+    ranked.sort(key=lambda item: item[1], reverse=True)
+    ordered = [candidate for candidate, _ in ranked[:8]]
+    return ordered[0], ordered
 
 
 def build_check_response(site_code: str, plate: str) -> CheckResponse:
@@ -293,6 +335,7 @@ def api_registry_status(request: Request):
         "vehicle_count": vehicle_count,
         "import_dir": str(IMPORT_DIR),
         "ocr_provider": os.getenv("PARKING_OCR_PROVIDER", "tesseract"),
+        "ocr_learning": get_learning_status(site_code),
         "last_sync": dict(last_run) if last_run else None,
     }
 
@@ -318,12 +361,13 @@ async def api_ocr_scan(request: Request, photo: UploadFile = File(...), manual_p
         raise HTTPException(status_code=400, detail="사진 파일이 비어 있습니다.")
 
     scan = scan_plate_image(image_bytes)
-    best_plate = normalize_plate(manual_plate) or (scan.candidates[0] if scan.candidates else None)
+    site_code = current_site_code(request)
+    best_plate, ordered_candidates = choose_best_scan_candidate(site_code, scan.raw_text, manual_plate, scan.candidates)
     match = build_check_response(current_site_code(request), best_plate).model_dump() if best_plate else None
     return {
         "provider": scan.provider,
         "raw_text": scan.raw_text,
-        "candidates": scan.candidates,
+        "candidates": ordered_candidates,
         "best_plate": best_plate,
         "match": match,
         "error": scan.error,
@@ -338,6 +382,8 @@ async def api_enforcement_submit(
     location: str | None = Form(None),
     memo: str | None = Form(None),
     raw_ocr_text: str | None = Form(None),
+    ocr_best_plate: str | None = Form(None),
+    ocr_candidates: str | None = Form(None),
     lat: float | None = Form(None),
     lng: float | None = Form(None),
     photo: UploadFile | None = File(None),
@@ -347,6 +393,7 @@ async def api_enforcement_submit(
     site_code = current_site_code(request)
     check = build_check_response(site_code, plate)
     photo_path = save_photo(photo) if photo else None
+    learned_candidates = parse_candidates_json(ocr_candidates)
 
     with connect() as con:
         cur = con.execute(
@@ -375,6 +422,15 @@ async def api_enforcement_submit(
         event_id = cur.lastrowid
         row = con.execute("SELECT * FROM enforcement_events WHERE id = ?", (event_id,)).fetchone()
         con.commit()
+
+    record_ocr_feedback(
+        site_code=site_code,
+        raw_ocr_text=raw_ocr_text,
+        suggested_plate=ocr_best_plate,
+        corrected_plate=check.plate,
+        candidates=learned_candidates,
+        photo_path=photo_path,
+    )
 
     return dict(row)
 

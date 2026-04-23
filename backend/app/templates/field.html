@@ -28,112 +28,158 @@
       </form>
     </header>
 
-    <section class="hero-card">
+    <section class="hero-card hero-layout">
       <div>
         <p class="eyebrow">현장 흐름</p>
-        <h2>촬영 → OCR 후보 확인 → 등록 여부 판단 → 단속기록 저장</h2>
-        <p class="subtle">OCR 결과는 자동 확정하지 않고 직원이 한 번 확인하는 구조입니다. 실제 현장에서 오탐을 줄이기 위한 방식입니다.</p>
+        <h2>차를 발견하면 바로 촬영하고, 후보를 확인한 뒤 저장합니다.</h2>
+        <p class="subtle">촬영 후 자동으로 OCR을 돌리고, 등록차량 DB와 대조해 가장 가능성 높은 번호를 우선 선택합니다.</p>
       </div>
-      <div class="hero-meta">
-        <span class="pill">OCR: {{ ocr_provider }}</span>
-        <span class="pill">Excel Sync: {{ import_dir }}</span>
+      <div class="workflow-strip">
+        <span class="workflow-step is-active">1. 촬영</span>
+        <span class="workflow-step">2. 후보확인</span>
+        <span class="workflow-step">3. 판정</span>
+        <span class="workflow-step">4. 저장</span>
       </div>
     </section>
 
-    <section class="grid">
-      <article class="panel">
+    <section class="ops-grid">
+      <article class="panel capture-panel">
         <div class="panel-head">
           <div>
-            <p class="eyebrow">Step 1</p>
-            <h3>번호판 촬영 또는 직접 입력</h3>
+            <p class="eyebrow">Capture</p>
+            <h3>현장 입력</h3>
           </div>
+          <div id="status-banner" class="status-banner status-idle">촬영 대기 중</div>
         </div>
 
         <form id="scan-form" class="stack-form">
-          <label class="file-field">
-            <span>번호판 사진</span>
-            <input id="photo" type="file" name="photo" accept="image/*" capture="environment">
-          </label>
+          <section class="camera-stage">
+            <div id="preview-shell" class="preview-shell">
+              <img id="photo-preview" class="photo-preview" alt="번호판 미리보기" hidden>
+              <div id="preview-placeholder" class="preview-placeholder">
+                <strong>번호판 사진을 촬영해 주세요.</strong>
+                <span>스마트폰에서는 카메라가 바로 열립니다.</span>
+              </div>
+            </div>
 
-          <div class="two-col">
+            <div class="capture-actions">
+              <label class="capture-button">
+                <span>번호판 촬영</span>
+                <input id="photo" type="file" name="photo" accept="image/*" capture="environment">
+              </label>
+              <button id="scan-btn" type="button" class="primary-btn action-tall">다시 판독</button>
+              <button id="check-btn" type="button" class="secondary-btn action-tall">직접 조회</button>
+            </div>
+          </section>
+
+          <div class="field-grid">
             <label>
               <span>차량번호</span>
-              <input id="plate-input" type="text" name="plate" placeholder="예: 12가3456">
+              <input id="plate-input" type="text" name="plate" placeholder="예: 12가3456" inputmode="text" autocomplete="off">
             </label>
             <label>
               <span>단속자</span>
-              <input id="inspector" type="text" name="inspector" placeholder="경비1조">
+              <input id="inspector" type="text" name="inspector" placeholder="예: 경비1조" autocomplete="off">
             </label>
           </div>
 
-          <div class="two-col">
+          <div class="field-grid">
             <label>
               <span>위치</span>
-              <input id="location" type="text" name="location" placeholder="지상 2구역">
+              <input id="location" type="text" name="location" placeholder="예: 지상 2구역 / 103동 앞" autocomplete="off">
             </label>
             <label>
               <span>메모</span>
-              <input id="memo" type="text" name="memo" placeholder="소화전 앞">
+              <input id="memo" type="text" name="memo" placeholder="예: 소화전 앞 / 이중주차" autocomplete="off">
             </label>
           </div>
 
-          <div class="button-row">
-            <button id="scan-btn" type="button" class="primary-btn">OCR 판독</button>
-            <button id="check-btn" type="button" class="secondary-btn">번호 조회</button>
-            <button id="save-btn" type="button" class="danger-btn">기록 저장</button>
+          <section class="quick-section">
+            <div class="quick-head">
+              <p class="eyebrow">Quick Memo</p>
+              <span class="subtle">자주 쓰는 사유를 한 번에 입력합니다.</span>
+            </div>
+            <div class="quick-chip-row">
+              <button type="button" class="quick-chip" data-memo="소화전 앞">소화전 앞</button>
+              <button type="button" class="quick-chip" data-memo="이중주차">이중주차</button>
+              <button type="button" class="quick-chip" data-memo="방문증 미부착">방문증 미부착</button>
+              <button type="button" class="quick-chip" data-memo="지하주차장 통로 방해">통로 방해</button>
+              <button type="button" class="quick-chip" data-memo="장기 의심 차량">장기 의심</button>
+              <button type="button" class="quick-chip" data-memo="출입구 방해">출입구 방해</button>
+            </div>
+          </section>
+
+          <div class="save-strip">
+            <button id="save-btn" type="button" class="danger-btn action-tall">단속 기록 저장</button>
+            <button id="reset-btn" type="button" class="ghost-btn action-tall">다음 차량 준비</button>
           </div>
         </form>
 
-        <div id="ocr-note" class="note-box">카메라가 없거나 OCR이 잘 안 읽히면 차량번호를 직접 입력해도 됩니다.</div>
-        <div id="candidate-list" class="candidate-list"></div>
-        <pre id="ocr-raw" class="ocr-raw" hidden></pre>
-      </article>
+        <div id="ocr-note" class="note-box">사진을 선택하면 자동으로 OCR을 시도합니다. 결과가 틀리면 차량번호를 직접 고쳐 저장해 주세요. 그 교정 이력은 다음 판독 후보 정렬에 다시 반영됩니다.</div>
 
-      <article class="panel verdict-panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow">Step 2</p>
-            <h3>판정 결과</h3>
+        <section class="quick-section">
+          <div class="quick-head">
+            <p class="eyebrow">OCR Candidates</p>
+            <span class="subtle">등록차량 DB에 있는 후보가 우선 배치됩니다.</span>
           </div>
-        </div>
-        <div id="verdict-card" class="verdict-card verdict-idle">
-          <p class="verdict-label">대기 중</p>
-          <h4 id="verdict-title">촬영 후 판독하거나 차량번호를 조회해 주세요.</h4>
-          <p id="verdict-detail" class="subtle">등록차량/차단/기간만료/임시 여부를 즉시 확인합니다.</p>
-          <dl id="verdict-meta" class="meta-list"></dl>
-        </div>
+          <div id="candidate-list" class="candidate-list"></div>
+        </section>
 
-        <div class="geo-box">
-          <button id="geo-btn" type="button" class="ghost-btn">현재 위치 가져오기</button>
-          <p id="geo-status" class="subtle">위치 권한을 허용하면 단속 위치 좌표를 저장합니다.</p>
-        </div>
+        <details class="ocr-details">
+          <summary>OCR 원문 보기</summary>
+          <pre id="ocr-raw" class="ocr-raw" hidden></pre>
+        </details>
       </article>
+
+      <aside class="side-stack">
+        <article class="panel verdict-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Result</p>
+              <h3>등록 판정</h3>
+            </div>
+          </div>
+
+          <div id="verdict-card" class="verdict-card verdict-idle">
+            <p class="verdict-label">대기 중</p>
+            <h4 id="verdict-title">차량을 촬영하거나 번호를 입력해 주세요.</h4>
+            <p id="verdict-detail" class="subtle">정상 등록, 임시 등록, 기간 만료, 차단 여부를 즉시 확인합니다.</p>
+            <dl id="verdict-meta" class="meta-list"></dl>
+          </div>
+
+          <div class="geo-box">
+            <div class="geo-head">
+              <p class="eyebrow">Location</p>
+              <button id="geo-btn" type="button" class="ghost-btn">현재 위치 가져오기</button>
+            </div>
+            <p id="geo-status" class="subtle">위치 권한을 허용하면 단속 좌표를 함께 저장합니다.</p>
+          </div>
+        </article>
+
+        <article class="panel mini-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Search</p>
+              <h3>등록차량 빠른 검색</h3>
+            </div>
+          </div>
+          <div class="search-row">
+            <input id="search-query" type="text" placeholder="차량번호, 동호수, 차주명">
+            <button id="search-btn" type="button" class="secondary-btn">검색</button>
+          </div>
+          <div id="search-results" class="list-board empty-state">검색 결과가 여기에 표시됩니다.</div>
+        </article>
+      </aside>
     </section>
 
-    <section class="grid lower-grid">
-      <article class="panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow">Search</p>
-            <h3>등록차량 빠른 검색</h3>
-          </div>
+    <section class="panel log-panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Recent</p>
+          <h3>최근 단속 기록</h3>
         </div>
-        <div class="search-row">
-          <input id="search-query" type="text" placeholder="차량번호, 동호수, 차주명">
-          <button id="search-btn" type="button" class="secondary-btn">검색</button>
-        </div>
-        <div id="search-results" class="list-board empty-state">검색 결과가 여기에 표시됩니다.</div>
-      </article>
-
-      <article class="panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow">Recent</p>
-            <h3>최근 단속 기록</h3>
-          </div>
-        </div>
-        <div id="recent-results" class="list-board empty-state">저장된 기록을 불러오는 중입니다.</div>
-      </article>
+      </div>
+      <div id="recent-results" class="list-board empty-state">저장된 기록을 불러오는 중입니다.</div>
     </section>
 
     {% if is_admin %}

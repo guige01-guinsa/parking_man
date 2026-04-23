@@ -2,10 +2,16 @@ const rootPath = document.body.dataset.rootPath || "";
 const apiUrl = (path) => `${rootPath}${path}`;
 
 const photoInput = document.getElementById("photo");
+const photoPreview = document.getElementById("photo-preview");
+const previewPlaceholder = document.getElementById("preview-placeholder");
 const plateInput = document.getElementById("plate-input");
 const inspectorInput = document.getElementById("inspector");
 const locationInput = document.getElementById("location");
 const memoInput = document.getElementById("memo");
+const scanBtn = document.getElementById("scan-btn");
+const checkBtn = document.getElementById("check-btn");
+const saveBtn = document.getElementById("save-btn");
+const resetBtn = document.getElementById("reset-btn");
 const candidateList = document.getElementById("candidate-list");
 const ocrRaw = document.getElementById("ocr-raw");
 const verdictCard = document.getElementById("verdict-card");
@@ -16,10 +22,15 @@ const recentResults = document.getElementById("recent-results");
 const searchResults = document.getElementById("search-results");
 const registryStatus = document.getElementById("registry-status");
 const geoStatus = document.getElementById("geo-status");
+const statusBanner = document.getElementById("status-banner");
+const quickMemoButtons = Array.from(document.querySelectorAll(".quick-chip"));
 
 let latestRawText = "";
 let latestVerdict = null;
 let currentGeo = { lat: null, lng: null };
+let objectUrl = "";
+let latestOcrBestPlate = "";
+let latestOcrCandidates = [];
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -44,6 +55,58 @@ function badgeClass(verdict) {
   return "badge-idle";
 }
 
+function setStatus(message, tone = "idle") {
+  statusBanner.textContent = message;
+  statusBanner.className = `status-banner status-${tone}`;
+}
+
+function persistField(key, value) {
+  localStorage.setItem(`parking:${key}`, value);
+}
+
+function hydrateFields() {
+  inspectorInput.value = localStorage.getItem("parking:inspector") || "";
+  locationInput.value = localStorage.getItem("parking:location") || "";
+}
+
+function syncQuickMemoState() {
+  const current = memoInput.value.trim();
+  quickMemoButtons.forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.memo === current);
+  });
+}
+
+function updatePreview(file) {
+  if (objectUrl) {
+    URL.revokeObjectURL(objectUrl);
+    objectUrl = "";
+  }
+
+  if (!file) {
+    photoPreview.hidden = true;
+    previewPlaceholder.hidden = false;
+    photoPreview.removeAttribute("src");
+    return;
+  }
+
+  objectUrl = URL.createObjectURL(file);
+  photoPreview.src = objectUrl;
+  photoPreview.hidden = false;
+  previewPlaceholder.hidden = true;
+}
+
+function renderIdleVerdict() {
+  latestVerdict = null;
+  latestOcrBestPlate = "";
+  latestOcrCandidates = [];
+  verdictCard.className = "verdict-card verdict-idle";
+  verdictCard.querySelector(".verdict-label").textContent = "대기 중";
+  verdictTitle.textContent = "차량을 촬영하거나 번호를 입력해 주세요.";
+  verdictDetail.textContent = "정상 등록, 임시 등록, 기간 만료, 차단 여부를 즉시 확인합니다.";
+  verdictMeta.innerHTML = "";
+  saveBtn.textContent = "단속 기록 저장";
+}
+
 function renderVerdict(data) {
   latestVerdict = data;
   verdictCard.className = `verdict-card ${verdictClass(data.verdict)}`;
@@ -62,20 +125,42 @@ function renderVerdict(data) {
   verdictMeta.innerHTML = meta
     .map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`)
     .join("");
+
+  if (data.verdict === "OK") {
+    saveBtn.textContent = "정상 확인 저장";
+  } else if (data.verdict === "TEMP") {
+    saveBtn.textContent = "임시 등록 확인 저장";
+  } else {
+    saveBtn.textContent = "단속 기록 저장";
+  }
 }
 
 function renderCandidates(items) {
   if (!items?.length) {
-    candidateList.innerHTML = "";
+    candidateList.innerHTML = '<span class="subtle">후보가 없으면 차량번호를 직접 입력해 주세요.</span>';
     return;
   }
   candidateList.innerHTML = items
-    .map((candidate) => `<button type="button" class="candidate-chip" data-plate="${escapeHtml(candidate)}">${escapeHtml(candidate)}</button>`)
+    .map((candidate, index) => `
+      <button type="button" class="candidate-chip ${index === 0 ? "is-primary" : ""}" data-plate="${escapeHtml(candidate)}">
+        ${escapeHtml(candidate)}
+      </button>
+    `)
     .join("");
   candidateList.querySelectorAll("[data-plate]").forEach((button) => {
     button.addEventListener("click", () => {
       plateInput.value = button.dataset.plate || "";
-      runCheck();
+      setStatus(`후보 번호 ${button.dataset.plate} 선택`, "active");
+      runCheck().catch((error) => alert(error.message));
+    });
+  });
+}
+
+function attachResultClickHandlers(root) {
+  root.querySelectorAll("[data-plate-pick]").forEach((button) => {
+    button.addEventListener("click", () => {
+      plateInput.value = button.dataset.platePick || "";
+      runCheck().catch((error) => alert(error.message));
     });
   });
 }
@@ -91,7 +176,7 @@ function renderSearchResults(rows) {
     .map((row) => `
       <article class="result-item">
         <div class="result-top">
-          <span class="result-title">${escapeHtml(row.plate)}</span>
+          <button type="button" class="result-title pick-button" data-plate-pick="${escapeHtml(row.plate)}">${escapeHtml(row.plate)}</button>
           <span class="result-badge ${badgeClass((row.status || "active").toUpperCase() === "BLOCKED" ? "BLOCKED" : (row.status || "active") === "temp" ? "TEMP" : "OK")}">${escapeHtml(row.status || "active")}</span>
         </div>
         <div>${escapeHtml(row.owner_name || "-")} / ${escapeHtml(row.unit || "-")}</div>
@@ -99,6 +184,7 @@ function renderSearchResults(rows) {
       </article>
     `)
     .join("");
+  attachResultClickHandlers(searchResults);
 }
 
 function renderRecent(rows) {
@@ -112,7 +198,7 @@ function renderRecent(rows) {
     .map((row) => `
       <article class="result-item">
         <div class="result-top">
-          <span class="result-title">${escapeHtml(row.plate)}</span>
+          <button type="button" class="result-title pick-button" data-plate-pick="${escapeHtml(row.plate)}">${escapeHtml(row.plate)}</button>
           <span class="result-badge ${badgeClass(row.verdict)}">${escapeHtml(row.verdict)}</span>
         </div>
         <div>${escapeHtml(row.verdict_message || "-")}</div>
@@ -120,11 +206,14 @@ function renderRecent(rows) {
       </article>
     `)
     .join("");
+  attachResultClickHandlers(recentResults);
 }
 
 function renderRegistryStatus(status) {
   if (!registryStatus) return;
   const last = status.last_sync;
+  const learning = status.ocr_learning || {};
+  const lastFeedback = learning.last_feedback;
   registryStatus.innerHTML = `
     <div class="result-item">
       <div class="result-top">
@@ -133,6 +222,8 @@ function renderRegistryStatus(status) {
       </div>
       <div>폴더: ${escapeHtml(status.import_dir)}</div>
       <div class="subtle">${escapeHtml(last?.message || "아직 동기화 이력이 없습니다.")}</div>
+      <div class="subtle">AI 학습 누적: ${escapeHtml(learning.total_feedback || 0)}건 / 사용자 교정: ${escapeHtml(learning.corrected_feedback || 0)}건</div>
+      <div class="subtle">${lastFeedback ? `최근 학습: ${escapeHtml(lastFeedback.suggested_plate || "-")} → ${escapeHtml(lastFeedback.corrected_plate || "-")} (${escapeHtml(lastFeedback.created_at || "-")})` : "아직 OCR 학습 이력이 없습니다."}</div>
     </div>
   `;
 }
@@ -158,8 +249,10 @@ async function runCheck() {
     alert("차량번호를 입력해 주세요.");
     return;
   }
+  setStatus("등록차량 DB 조회 중", "active");
   const data = await fetchJson(`${apiUrl("/api/registry/check")}?plate=${encodeURIComponent(plate)}`);
   renderVerdict(data);
+  setStatus(`${data.plate} 조회 완료`, data.verdict === "OK" ? "success" : data.verdict === "TEMP" ? "warn" : "danger");
 }
 
 async function runScan() {
@@ -172,12 +265,15 @@ async function runScan() {
     return;
   }
 
+  setStatus("번호판 OCR 판독 중", "active");
   const formData = new FormData();
   formData.append("photo", photoInput.files[0]);
   formData.append("manual_plate", plateInput.value.trim());
 
   const result = await fetchJson(apiUrl("/api/ocr/scan"), { method: "POST", body: formData });
   latestRawText = result.raw_text || "";
+  latestOcrBestPlate = result.best_plate || "";
+  latestOcrCandidates = Array.isArray(result.candidates) ? result.candidates : [];
   renderCandidates(result.candidates || []);
   ocrRaw.hidden = !latestRawText;
   ocrRaw.textContent = latestRawText;
@@ -187,10 +283,33 @@ async function runScan() {
   }
   if (result.match) {
     renderVerdict(result.match);
+    setStatus(`${result.best_plate} 판독 완료`, result.match.verdict === "OK" ? "success" : result.match.verdict === "TEMP" ? "warn" : "danger");
+  } else {
+    setStatus("후보를 확인해 수동 선택해 주세요.", "warn");
   }
   if (result.error) {
     geoStatus.textContent = result.error;
   }
+}
+
+function vibrate(pattern) {
+  if (navigator.vibrate) {
+    navigator.vibrate(pattern);
+  }
+}
+
+function resetWorkflow() {
+  photoInput.value = "";
+  updatePreview(null);
+  plateInput.value = "";
+  memoInput.value = "";
+  latestRawText = "";
+  ocrRaw.hidden = true;
+  ocrRaw.textContent = "";
+  renderCandidates([]);
+  renderIdleVerdict();
+  syncQuickMemoState();
+  setStatus("다음 차량 촬영 준비", "idle");
 }
 
 async function saveEvent() {
@@ -203,19 +322,24 @@ async function saveEvent() {
     await runCheck();
   }
 
+  setStatus("단속 기록 저장 중", "active");
   const formData = new FormData();
   formData.append("plate", plateInput.value.trim());
   formData.append("inspector", inspectorInput.value.trim());
   formData.append("location", locationInput.value.trim());
   formData.append("memo", memoInput.value.trim());
   formData.append("raw_ocr_text", latestRawText);
+  formData.append("ocr_best_plate", latestOcrBestPlate);
+  formData.append("ocr_candidates", JSON.stringify(latestOcrCandidates));
   if (currentGeo.lat !== null) formData.append("lat", String(currentGeo.lat));
   if (currentGeo.lng !== null) formData.append("lng", String(currentGeo.lng));
   if (photoInput.files?.length) formData.append("photo", photoInput.files[0]);
 
   await fetchJson(apiUrl("/api/enforcement/submit"), { method: "POST", body: formData });
   await loadRecent();
-  alert("단속 기록이 저장되었습니다.");
+  vibrate([80, 40, 80]);
+  setStatus("기록 저장 완료", "success");
+  resetWorkflow();
 }
 
 async function searchRegistry() {
@@ -236,10 +360,11 @@ async function loadRegistryStatus() {
 }
 
 async function syncRegistry() {
+  setStatus("Excel 등록차량 동기화 중", "active");
   await fetchJson(apiUrl("/api/registry/sync"), { method: "POST" });
   await loadRegistryStatus();
   await searchRegistry();
-  alert("Excel 등록차량 정보를 다시 읽었습니다.");
+  setStatus("등록차량 다시 읽기 완료", "success");
 }
 
 function loadGeolocation() {
@@ -262,9 +387,38 @@ function loadGeolocation() {
   );
 }
 
-document.getElementById("scan-btn")?.addEventListener("click", () => runScan().catch((error) => alert(error.message)));
-document.getElementById("check-btn")?.addEventListener("click", () => runCheck().catch((error) => alert(error.message)));
-document.getElementById("save-btn")?.addEventListener("click", () => saveEvent().catch((error) => alert(error.message)));
+photoInput?.addEventListener("change", () => {
+  const file = photoInput.files?.[0];
+  updatePreview(file || null);
+  if (file) {
+    runScan().catch((error) => alert(error.message));
+  } else {
+    setStatus("촬영 대기 중", "idle");
+  }
+});
+
+plateInput?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    runCheck().catch((error) => alert(error.message));
+  }
+});
+
+inspectorInput?.addEventListener("input", () => persistField("inspector", inspectorInput.value.trim()));
+locationInput?.addEventListener("input", () => persistField("location", locationInput.value.trim()));
+memoInput?.addEventListener("input", syncQuickMemoState);
+
+quickMemoButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    memoInput.value = button.dataset.memo || "";
+    syncQuickMemoState();
+  });
+});
+
+scanBtn?.addEventListener("click", () => runScan().catch((error) => alert(error.message)));
+checkBtn?.addEventListener("click", () => runCheck().catch((error) => alert(error.message)));
+saveBtn?.addEventListener("click", () => saveEvent().catch((error) => alert(error.message)));
+resetBtn?.addEventListener("click", resetWorkflow);
 document.getElementById("search-btn")?.addEventListener("click", () => searchRegistry().catch((error) => alert(error.message)));
 document.getElementById("sync-btn")?.addEventListener("click", () => syncRegistry().catch((error) => alert(error.message)));
 document.getElementById("geo-btn")?.addEventListener("click", loadGeolocation);
@@ -274,6 +428,12 @@ document.getElementById("search-query")?.addEventListener("keydown", (event) => 
     searchRegistry().catch((error) => alert(error.message));
   }
 });
+
+hydrateFields();
+syncQuickMemoState();
+renderCandidates([]);
+renderIdleVerdict();
+setStatus("촬영 대기 중", "idle");
 
 loadRecent().catch((error) => {
   recentResults.className = "list-board empty-state";

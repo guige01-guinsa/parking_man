@@ -13,6 +13,13 @@ class PlateTests(unittest.TestCase):
         text = "차량번호는 123다4567 입니다."
         self.assertEqual(extract_plate_candidates(text), ["123다4567"])
 
+    def test_extract_plate_candidates_repairs_digit_confusion(self):
+        text = "번호판: I2가34S6"
+        self.assertIn("12가3456", extract_plate_candidates(text))
+
+    def test_normalize_plate_prefers_repaired_candidate(self):
+        self.assertEqual(normalize_plate("123허34B6"), "123허3486")
+
     def test_status_aliases(self):
         self.assertEqual(normalize_status("차단"), "blocked")
         self.assertEqual(normalize_status("임시"), "temp")
