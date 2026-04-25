@@ -319,6 +319,11 @@ def require_form_text(value: str | None, label: str) -> str:
     return text
 
 
+def validate_cctv_time_range(search_start_time: str, search_end_time: str) -> None:
+    if search_end_time < search_start_time:
+        raise HTTPException(status_code=400, detail="검색 끝 시간은 시작 시간 이후로 입력해 주세요.")
+
+
 def normalize_new_password(value: str | None, *, required: bool) -> str | None:
     if value is None:
         if required:
@@ -397,6 +402,10 @@ def save_photo_bytes(filename: str | None, payload: bytes) -> str:
 
 def cctv_request_dict(row: dict[str, Any] | Any) -> dict[str, Any]:
     data = dict(row)
+    start_time = data.get("search_start_time") or data.get("search_time")
+    end_time = data.get("search_end_time") or start_time
+    data["search_start_time"] = start_time
+    data["search_end_time"] = end_time
     data["status_label"] = CCTV_STATUS_LABELS.get(data.get("status"), data.get("status") or "-")
     return data
 
@@ -679,7 +688,7 @@ def api_cctv_requests(request: Request, limit: int = 50):
             ELSE 4
           END,
           work_weight DESC,
-          search_time ASC,
+          COALESCE(search_start_time, search_time) ASC,
           created_at DESC
         LIMIT ?
     """
@@ -694,14 +703,18 @@ async def api_cctv_request_create(
     request: Request,
     photo: UploadFile = File(...),
     location: str = Form(...),
-    search_time: str = Form(...),
+    search_start_time: str | None = Form(None),
+    search_end_time: str | None = Form(None),
+    search_time: str | None = Form(None),
     content: str = Form(...),
 ):
     ensure_ready()
     session = require_role(request, {"admin", "guard", "viewer"})
     site_code = current_site_code(request)
     normalized_location = require_form_text(location, "위치")
-    normalized_search_time = require_form_text(search_time, "검색 시간")
+    normalized_search_start_time = require_form_text(search_start_time or search_time, "검색 시작 시간")
+    normalized_search_end_time = require_form_text(search_end_time or search_time, "검색 끝 시간")
+    validate_cctv_time_range(normalized_search_start_time, normalized_search_end_time)
     normalized_content = require_form_text(content, "요청 내용")
     payload = await photo.read()
     photo_path = save_photo_bytes(photo.filename, payload)
@@ -710,15 +723,17 @@ async def api_cctv_request_create(
         cur = con.execute(
             """
             INSERT INTO cctv_search_requests
-            (site_code, requester_username, photo_path, location, search_time, content)
-            VALUES (?, ?, ?, ?, ?, ?)
+            (site_code, requester_username, photo_path, location, search_time, search_start_time, search_end_time, content)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 site_code,
                 session.get("u"),
                 photo_path,
                 normalized_location,
-                normalized_search_time,
+                normalized_search_start_time,
+                normalized_search_start_time,
+                normalized_search_end_time,
                 normalized_content,
             ),
         )

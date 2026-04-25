@@ -195,10 +195,14 @@
               <input id="cctv-photo" type="file" name="photo" accept="image/*" capture="environment" required>
             </label>
             <label>
-              <span>검색 시간</span>
-              <input id="cctv-search-time" type="datetime-local" name="search_time" required>
+              <span>시작 시간</span>
+              <input id="cctv-search-start-time" type="datetime-local" name="search_start_time" required>
             </label>
           </div>
+          <label>
+            <span>끝 시간</span>
+            <input id="cctv-search-end-time" type="datetime-local" name="search_end_time" required>
+          </label>
           <label>
             <span>위치</span>
             <input id="cctv-location" type="text" name="location" placeholder="예: 103동 1층 출입구" autocomplete="off" required>

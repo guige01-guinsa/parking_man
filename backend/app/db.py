@@ -35,11 +35,49 @@ def connect() -> sqlite3.Connection:
     return con
 
 
+def table_columns(con: sqlite3.Connection, table_name: str) -> set[str]:
+    rows = con.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {row["name"] for row in rows}
+
+
+def ensure_cctv_request_schema(con: sqlite3.Connection) -> None:
+    columns = table_columns(con, "cctv_search_requests")
+    if not columns:
+        return
+
+    if "search_start_time" not in columns:
+        con.execute("ALTER TABLE cctv_search_requests ADD COLUMN search_start_time TEXT")
+    if "search_end_time" not in columns:
+        con.execute("ALTER TABLE cctv_search_requests ADD COLUMN search_end_time TEXT")
+
+    con.execute(
+        """
+        UPDATE cctv_search_requests
+        SET search_start_time = COALESCE(NULLIF(search_start_time, ''), search_time)
+        WHERE search_start_time IS NULL OR search_start_time = ''
+        """
+    )
+    con.execute(
+        """
+        UPDATE cctv_search_requests
+        SET search_end_time = COALESCE(NULLIF(search_end_time, ''), search_start_time, search_time)
+        WHERE search_end_time IS NULL OR search_end_time = ''
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_cctv_requests_site_status_range
+        ON cctv_search_requests(site_code, status, search_start_time, search_end_time)
+        """
+    )
+
+
 def init_db() -> None:
     schema_path = BASE_DIR / "schema.sql"
     schema_sql = schema_path.read_text(encoding="utf-8")
     with connect() as con:
         con.executescript(schema_sql)
+        ensure_cctv_request_schema(con)
         con.commit()
 
 

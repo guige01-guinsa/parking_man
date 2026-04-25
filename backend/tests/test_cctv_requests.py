@@ -46,7 +46,8 @@ class CctvRequestTests(unittest.TestCase):
             "/api/cctv/requests",
             data={
                 "location": "103동 1층 출입구",
-                "search_time": "2026-04-25T12:30",
+                "search_start_time": "2026-04-25T12:20",
+                "search_end_time": "2026-04-25T12:40",
                 "content": "차량 이동 경로 확인",
             },
             files={"photo": ("request.jpg", b"fake-image", "image/jpeg")},
@@ -61,6 +62,8 @@ class CctvRequestTests(unittest.TestCase):
         self.assertEqual(body["requester_username"], "viewer")
         self.assertEqual(body["status"], "requested")
         self.assertEqual(body["work_weight"], 1)
+        self.assertEqual(body["search_start_time"], "2026-04-25T12:20")
+        self.assertEqual(body["search_end_time"], "2026-04-25T12:40")
         self.assertIn("/uploads/", body["photo_path"])
 
         listing = client.get("/api/cctv/requests")
@@ -108,11 +111,86 @@ class CctvRequestTests(unittest.TestCase):
         client = self.login("viewer", "viewer1234")
         response = client.post(
             "/api/cctv/requests",
-            data={"location": "103동", "search_time": "2026-04-25T12:30", "content": " "},
+            data={
+                "location": "103동",
+                "search_start_time": "2026-04-25T12:20",
+                "search_end_time": "2026-04-25T12:40",
+                "content": " ",
+            },
             files={"photo": ("request.jpg", b"fake-image", "image/jpeg")},
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("요청 내용", response.json()["detail"])
+
+    def test_cctv_request_requires_end_time(self):
+        client = self.login("viewer", "viewer1234")
+        response = client.post(
+            "/api/cctv/requests",
+            data={
+                "location": "103동",
+                "search_start_time": "2026-04-25T12:20",
+                "content": "차량 이동 경로 확인",
+            },
+            files={"photo": ("request.jpg", b"fake-image", "image/jpeg")},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("검색 끝 시간", response.json()["detail"])
+
+    def test_cctv_request_rejects_end_time_before_start_time(self):
+        client = self.login("viewer", "viewer1234")
+        response = client.post(
+            "/api/cctv/requests",
+            data={
+                "location": "103동",
+                "search_start_time": "2026-04-25T12:40",
+                "search_end_time": "2026-04-25T12:20",
+                "content": "차량 이동 경로 확인",
+            },
+            files={"photo": ("request.jpg", b"fake-image", "image/jpeg")},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("끝 시간", response.json()["detail"])
+
+    def test_init_db_migrates_existing_single_search_time_column(self):
+        with db.connect() as con:
+            con.execute("DROP TABLE cctv_search_requests")
+            con.execute(
+                """
+                CREATE TABLE cctv_search_requests (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  site_code TEXT NOT NULL,
+                  requester_username TEXT NOT NULL,
+                  photo_path TEXT NOT NULL,
+                  location TEXT NOT NULL,
+                  search_time TEXT NOT NULL,
+                  content TEXT NOT NULL,
+                  status TEXT NOT NULL DEFAULT 'requested',
+                  work_weight INTEGER NOT NULL DEFAULT 1,
+                  assigned_to TEXT,
+                  instruction TEXT,
+                  assigned_by TEXT,
+                  assigned_at TEXT,
+                  completed_at TEXT,
+                  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+                """
+            )
+            con.execute(
+                """
+                INSERT INTO cctv_search_requests
+                (site_code, requester_username, photo_path, location, search_time, content)
+                VALUES ('APT1100', 'viewer', '/uploads/old.jpg', '103동', '2026-04-25T12:30', '기존 요청')
+                """
+            )
+            con.commit()
+
+        db.init_db()
+
+        with db.connect() as con:
+            row = con.execute("SELECT search_start_time, search_end_time FROM cctv_search_requests").fetchone()
+        self.assertEqual(row["search_start_time"], "2026-04-25T12:30")
+        self.assertEqual(row["search_end_time"], "2026-04-25T12:30")
 
 
 if __name__ == "__main__":

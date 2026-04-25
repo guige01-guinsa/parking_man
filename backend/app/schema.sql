@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS cctv_search_requests (
   photo_path TEXT NOT NULL,
   location TEXT NOT NULL,
   search_time TEXT NOT NULL,
+  search_start_time TEXT NOT NULL,
+  search_end_time TEXT NOT NULL,
   content TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'requested',
   work_weight INTEGER NOT NULL DEFAULT 1,

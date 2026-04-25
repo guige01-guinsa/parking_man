@@ -40,7 +40,8 @@ const userRefreshBtn = document.getElementById("user-refresh-btn");
 const cctvRequestForm = document.getElementById("cctv-request-form");
 const cctvPhotoInput = document.getElementById("cctv-photo");
 const cctvLocationInput = document.getElementById("cctv-location");
-const cctvSearchTimeInput = document.getElementById("cctv-search-time");
+const cctvSearchStartTimeInput = document.getElementById("cctv-search-start-time");
+const cctvSearchEndTimeInput = document.getElementById("cctv-search-end-time");
 const cctvContentInput = document.getElementById("cctv-content");
 const cctvRequestList = document.getElementById("cctv-request-list");
 const cctvRefreshBtn = document.getElementById("cctv-refresh-btn");
@@ -578,6 +579,15 @@ function displayDateTime(value) {
   return String(value || "-").replace("T", " ").slice(0, 16);
 }
 
+function displayDateTimeRange(startValue, endValue) {
+  const start = displayDateTime(startValue);
+  const end = displayDateTime(endValue);
+  if (start === end) {
+    return start;
+  }
+  return `${start} ~ ${end}`;
+}
+
 function renderCctvAdminControls(row) {
   if (currentRole !== "admin") {
     return "";
@@ -631,7 +641,7 @@ function renderCctvRequests(rows) {
           <div class="result-top">
             <div>
               <div class="result-title">${escapeHtml(row.location || "-")}</div>
-              <div class="subtle">요청자 ${escapeHtml(row.requester_username || "-")} · 검색 ${escapeHtml(displayDateTime(row.search_time))}</div>
+              <div class="subtle">요청자 ${escapeHtml(row.requester_username || "-")} · 검색 ${escapeHtml(displayDateTimeRange(row.search_start_time || row.search_time, row.search_end_time || row.search_time))}</div>
             </div>
             <span class="result-badge ${status.badgeClass}">${escapeHtml(status.label)}</span>
           </div>
@@ -846,10 +856,15 @@ async function createCctvRequest(event) {
     return;
   }
   const location = cctvLocationInput?.value.trim() || "";
-  const searchTime = cctvSearchTimeInput?.value.trim() || "";
+  const searchStartTime = cctvSearchStartTimeInput?.value.trim() || "";
+  const searchEndTime = cctvSearchEndTimeInput?.value.trim() || "";
   const content = cctvContentInput?.value.trim() || "";
-  if (!location || !searchTime || !content) {
-    alert("사진, 위치, 시간, 내용을 모두 입력해 주세요.");
+  if (!location || !searchStartTime || !searchEndTime || !content) {
+    alert("사진, 위치, 시작 시간, 끝 시간, 내용을 모두 입력해 주세요.");
+    return;
+  }
+  if (searchEndTime < searchStartTime) {
+    alert("끝 시간은 시작 시간 이후로 입력해 주세요.");
     return;
   }
 
@@ -857,7 +872,8 @@ async function createCctvRequest(event) {
   const formData = new FormData();
   formData.append("photo", cctvPhotoInput.files[0]);
   formData.append("location", location);
-  formData.append("search_time", searchTime);
+  formData.append("search_start_time", searchStartTime);
+  formData.append("search_end_time", searchEndTime);
   formData.append("content", content);
 
   await fetchJson(apiUrl("/api/cctv/requests"), { method: "POST", body: formData });
