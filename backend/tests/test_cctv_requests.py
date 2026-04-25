@@ -126,6 +126,26 @@ class CctvRequestTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["assigned_by"], "teamlead")
 
+    def test_done_and_cancelled_requests_are_hidden_from_list(self):
+        cleaner = self.login("cleaner", "cleaner1234")
+        done_id = self.create_request(cleaner).json()["id"]
+        cancelled_id = self.create_request(cleaner).json()["id"]
+        active_id = self.create_request(cleaner).json()["id"]
+
+        admin = self.login("admin", "admin1234")
+        done = admin.patch(f"/api/cctv/requests/{done_id}", json={"status": "done"})
+        cancelled = admin.patch(f"/api/cctv/requests/{cancelled_id}", json={"status": "cancelled"})
+        self.assertEqual(done.status_code, 200)
+        self.assertEqual(cancelled.status_code, 200)
+
+        admin_listing = admin.get("/api/cctv/requests")
+        cleaner_listing = cleaner.get("/api/cctv/requests")
+
+        self.assertEqual(admin_listing.status_code, 200)
+        self.assertEqual(cleaner_listing.status_code, 200)
+        self.assertEqual([row["id"] for row in admin_listing.json()], [active_id])
+        self.assertEqual([row["id"] for row in cleaner_listing.json()], [active_id])
+
     def test_cctv_request_requires_required_fields(self):
         client = self.login("cleaner", "cleaner1234")
         response = client.post(

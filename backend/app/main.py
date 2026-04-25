@@ -686,6 +686,7 @@ def api_cctv_requests(request: Request, limit: int = 50):
         SELECT *
         FROM cctv_search_requests
         WHERE site_code = ?
+          AND status NOT IN ('done', 'cancelled')
     """
     params: list[Any] = [site_code]
     if session.get("r") not in CCTV_ASSIGNMENT_ROLES:
