@@ -13,6 +13,19 @@
 4. 상품 ID를 바꾸면 `android/app/build.gradle`의 `STARTER_PRODUCT_ID`, `STANDARD_PRODUCT_ID`, `PRO_PRODUCT_ID`와 서버 환경변수 `PARKING_GOOGLE_PLAY_PRODUCT_*`를 같이 바꿉니다.
 5. 릴리스 서명 키는 저장소에 커밋하지 말고 Android Studio 또는 CI 비밀값으로 설정합니다.
 
+## 릴리스 빌드 산출물
+
+- Play Console 업로드용 AAB: `android/app/build/outputs/bundle/release/app-release.aab`
+- 테스트 설치용 APK: `android/app/build/outputs/apk/release/app-release.apk`
+- 로컬 서명 정보는 `android/keystore.properties`와 `android/parking-release.jks`에 저장되며 `.gitignore`로 제외됩니다. 이 두 파일을 잃어버리면 같은 앱의 후속 업데이트 서명이 불가능할 수 있으므로 별도로 백업해야 합니다.
+
+명령줄 빌드:
+
+```powershell
+gradle --no-daemon :app:bundleRelease
+gradle --no-daemon :app:assembleRelease
+```
+
 ## 결제 흐름
 
 1. Android 앱이 BillingClient로 구독 상품을 조회합니다.
