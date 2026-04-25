@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import base64
+import json
 import os
 import re
 import shutil
 import threading
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -33,6 +37,16 @@ SUPPORT_KAKAO_LABEL = os.getenv("PARKING_SUPPORT_KAKAO_LABEL", "카카오톡 문
 BILLING_PROVIDER = os.getenv("PARKING_BILLING_PROVIDER", "manual").strip().lower() or "manual"
 BILLING_ENFORCEMENT_ENABLED = os.getenv("PARKING_BILLING_ENFORCEMENT_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 SALES_CONTACT_URL = os.getenv("PARKING_SALES_CONTACT_URL", "").strip()
+GOOGLE_PLAY_PACKAGE_NAME = os.getenv("PARKING_GOOGLE_PLAY_PACKAGE_NAME", "com.parkingmanagement.app").strip() or "com.parkingmanagement.app"
+GOOGLE_PLAY_SERVICE_ACCOUNT_JSON = os.getenv("PARKING_GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", "").strip()
+GOOGLE_PLAY_SERVICE_ACCOUNT_FILE = os.getenv("PARKING_GOOGLE_PLAY_SERVICE_ACCOUNT_FILE", os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")).strip()
+GOOGLE_PLAY_AUTO_ACKNOWLEDGE = os.getenv("PARKING_GOOGLE_PLAY_AUTO_ACKNOWLEDGE", "1").strip().lower() in {"1", "true", "yes", "on"}
+GOOGLE_PLAY_RTDN_TOKEN = os.getenv("PARKING_GOOGLE_PLAY_RTDN_TOKEN", "").strip()
+GOOGLE_PLAY_PRODUCT_IDS = {
+    "starter": os.getenv("PARKING_GOOGLE_PLAY_PRODUCT_STARTER", "parking_starter_monthly").strip() or "parking_starter_monthly",
+    "standard": os.getenv("PARKING_GOOGLE_PLAY_PRODUCT_STANDARD", "parking_standard_monthly").strip() or "parking_standard_monthly",
+    "pro": os.getenv("PARKING_GOOGLE_PLAY_PRODUCT_PRO", "parking_pro_monthly").strip() or "parking_pro_monthly",
+}
 
 if ROOT_PATH and not ROOT_PATH.startswith("/"):
     ROOT_PATH = f"/{ROOT_PATH}"
@@ -98,6 +112,12 @@ class BillingInquiryRequest(BaseModel):
     contact_phone: str | None = None
     contact_email: str | None = None
     message: str | None = None
+
+
+class GooglePlayVerifyRequest(BaseModel):
+    product_id: str
+    purchase_token: str
+    package_name: str | None = None
 
 
 class CctvAssignmentRequest(BaseModel):
@@ -296,9 +316,40 @@ def normalize_billing_text(value: str | None, field_name: str, max_length: int) 
     return text
 
 
+def google_play_product_id_for_plan(plan_code: str) -> str | None:
+    return GOOGLE_PLAY_PRODUCT_IDS.get(plan_code)
+
+
+def plan_for_google_play_product(product_id: str) -> str:
+    normalized = normalize_google_play_product_id(product_id)
+    for plan_code, configured_product_id in GOOGLE_PLAY_PRODUCT_IDS.items():
+        if configured_product_id == normalized:
+            return plan_code
+    raise HTTPException(status_code=400, detail="등록되지 않은 Google Play 상품입니다.")
+
+
+def normalize_google_play_product_id(value: str | None) -> str:
+    product_id = str(value or "").strip()
+    if not product_id or len(product_id) > 200 or not re.fullmatch(r"[A-Za-z0-9._-]+", product_id):
+        raise HTTPException(status_code=400, detail="Google Play 상품 ID를 다시 확인해 주세요.")
+    return product_id
+
+
+def normalize_purchase_token(value: str | None) -> str:
+    token = str(value or "").strip()
+    if not token or len(token) > 4096:
+        raise HTTPException(status_code=400, detail="Google Play 구매 토큰을 다시 확인해 주세요.")
+    return token
+
+
+def google_play_configured() -> bool:
+    return bool(GOOGLE_PLAY_PACKAGE_NAME and (GOOGLE_PLAY_SERVICE_ACCOUNT_JSON or GOOGLE_PLAY_SERVICE_ACCOUNT_FILE))
+
+
 def billing_plan_public_dict(plan_code: str) -> dict[str, Any]:
     plan = dict(BILLING_PLAN_CATALOG[plan_code])
     plan["display_price"] = "무료" if int(plan["monthly_price_krw"]) <= 0 else f"월 {int(plan['monthly_price_krw']):,}원"
+    plan["google_play_product_id"] = google_play_product_id_for_plan(plan_code)
     return plan
 
 
@@ -352,6 +403,19 @@ def billing_status_for_site(site_code: str) -> dict[str, Any]:
                 (normalized_site,),
             ).fetchall()
         ]
+        latest_google_play_purchases = [
+            dict(row)
+            for row in con.execute(
+                """
+                SELECT id, product_id, plan, order_id, subscription_state, acknowledgement_state, expires_at, verified_at
+                FROM google_play_purchases
+                WHERE site_code = ?
+                ORDER BY verified_at DESC, id DESC
+                LIMIT 5
+                """,
+                (normalized_site,),
+            ).fetchall()
+        ]
         trial_days_remaining = con.execute(
             """
             SELECT
@@ -387,8 +451,15 @@ def billing_status_for_site(site_code: str) -> dict[str, Any]:
         "plans": [billing_plan_public_dict(code) for code in ("starter", "standard", "pro")],
         "usage": usage,
         "latest_inquiries": latest_inquiries,
+        "latest_google_play_purchases": latest_google_play_purchases,
         "sales_contact_url": SALES_CONTACT_URL if BILLING_PROVIDER != "google_play" else "",
         "play_billing_required": BILLING_PROVIDER == "google_play",
+        "google_play": {
+            "package_name": GOOGLE_PLAY_PACKAGE_NAME,
+            "configured": google_play_configured(),
+            "auto_acknowledge": GOOGLE_PLAY_AUTO_ACKNOWLEDGE,
+            "products": {code: google_play_product_id_for_plan(code) for code in ("starter", "standard", "pro")},
+        },
     }
 
 
@@ -403,6 +474,212 @@ def require_billing_capacity(site_code: str, metric: str, next_count: int) -> No
     limit = int(plan.get(f"{metric}_limit") or 0)
     if limit > 0 and next_count > limit:
         raise HTTPException(status_code=402, detail="현재 요금제 한도를 초과했습니다. 업그레이드가 필요합니다.")
+
+
+def parse_google_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def latest_google_expiry(line_items: list[dict[str, Any]]) -> str | None:
+    values = [str(item.get("expiryTime") or "") for item in line_items if item.get("expiryTime")]
+    if not values:
+        return None
+    return max(values, key=lambda item: parse_google_time(item) or datetime.min.replace(tzinfo=timezone.utc))
+
+
+def google_subscription_status(subscription: dict[str, Any]) -> tuple[str, bool]:
+    state = str(subscription.get("subscriptionState") or "")
+    line_items = subscription.get("lineItems") if isinstance(subscription.get("lineItems"), list) else []
+    expires_at = latest_google_expiry(line_items)
+    expiry_dt = parse_google_time(expires_at)
+    expires_in_future = expiry_dt is None or expiry_dt > datetime.now(timezone.utc)
+
+    if state in {"SUBSCRIPTION_STATE_ACTIVE", "SUBSCRIPTION_STATE_IN_GRACE_PERIOD"}:
+        return "active", True
+    if state == "SUBSCRIPTION_STATE_CANCELED" and expires_in_future:
+        return "active", True
+    if state in {"SUBSCRIPTION_STATE_ON_HOLD", "SUBSCRIPTION_STATE_PAUSED", "SUBSCRIPTION_STATE_PENDING"}:
+        return "past_due", False
+    return "cancelled", False
+
+
+def google_play_authorized_session():
+    if not google_play_configured():
+        raise HTTPException(status_code=503, detail="Google Play 서비스 계정 설정이 필요합니다.")
+    try:
+        from google.auth.transport.requests import AuthorizedSession
+        from google.oauth2 import service_account
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail="Google Play 검증 라이브러리가 설치되어 있지 않습니다.") from exc
+
+    scopes = ["https://www.googleapis.com/auth/androidpublisher"]
+    try:
+        if GOOGLE_PLAY_SERVICE_ACCOUNT_JSON:
+            info = json.loads(GOOGLE_PLAY_SERVICE_ACCOUNT_JSON)
+            credentials = service_account.Credentials.from_service_account_info(info, scopes=scopes)
+        else:
+            credentials = service_account.Credentials.from_service_account_file(GOOGLE_PLAY_SERVICE_ACCOUNT_FILE, scopes=scopes)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Google Play 서비스 계정 설정을 읽을 수 없습니다: {exc}") from exc
+    return AuthorizedSession(credentials)
+
+
+def fetch_google_play_subscription(package_name: str, purchase_token: str) -> dict[str, Any]:
+    session = google_play_authorized_session()
+    url = (
+        "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/"
+        f"{quote(package_name, safe='')}/purchases/subscriptionsv2/tokens/{quote(purchase_token, safe='')}"
+    )
+    response = session.get(url, timeout=20)
+    if response.status_code == 404:
+        raise HTTPException(status_code=400, detail="Google Play 구매 토큰을 찾을 수 없습니다.")
+    if response.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"Google Play 구매 검증 실패: {response.status_code}")
+    return response.json()
+
+
+def acknowledge_google_play_subscription(package_name: str, product_id: str, purchase_token: str) -> bool:
+    session = google_play_authorized_session()
+    url = (
+        "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/"
+        f"{quote(package_name, safe='')}/purchases/subscriptions/{quote(product_id, safe='')}"
+        f"/tokens/{quote(purchase_token, safe='')}:acknowledge"
+    )
+    response = session.post(url, json={}, timeout=20)
+    if response.status_code in {200, 204}:
+        return True
+    if response.status_code == 409:
+        return True
+    raise HTTPException(status_code=502, detail=f"Google Play 구독 승인 실패: {response.status_code}")
+
+
+def save_google_play_purchase(
+    *,
+    con,
+    site_code: str,
+    username: str,
+    package_name: str,
+    product_id: str,
+    plan: str,
+    purchase_token: str,
+    subscription: dict[str, Any],
+    status: str,
+) -> None:
+    line_items = subscription.get("lineItems") if isinstance(subscription.get("lineItems"), list) else []
+    expires_at = latest_google_expiry(line_items)
+    order_id = subscription.get("latestOrderId")
+    subscription_state = subscription.get("subscriptionState")
+    acknowledgement_state = subscription.get("acknowledgementState")
+    raw_response = json.dumps(subscription, ensure_ascii=False, sort_keys=True)
+    con.execute(
+        """
+        INSERT INTO google_play_purchases
+        (site_code, username, package_name, product_id, plan, purchase_token, order_id,
+         subscription_state, acknowledgement_state, expires_at, raw_response_json, verified_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        ON CONFLICT(purchase_token) DO UPDATE SET
+          site_code = excluded.site_code,
+          username = excluded.username,
+          package_name = excluded.package_name,
+          product_id = excluded.product_id,
+          plan = excluded.plan,
+          order_id = excluded.order_id,
+          subscription_state = excluded.subscription_state,
+          acknowledgement_state = excluded.acknowledgement_state,
+          expires_at = excluded.expires_at,
+          raw_response_json = excluded.raw_response_json,
+          verified_at = datetime('now'),
+          updated_at = datetime('now')
+        """,
+        (
+            site_code,
+            username,
+            package_name,
+            product_id,
+            plan,
+            purchase_token,
+            order_id,
+            subscription_state,
+            acknowledgement_state,
+            expires_at,
+            raw_response,
+        ),
+    )
+    current = con.execute("SELECT plan, payment_provider FROM site_billing WHERE site_code = ?", (site_code,)).fetchone()
+    should_update_billing = status == "active" or (
+        current and current["payment_provider"] == "google_play" and current["plan"] == plan
+    )
+    if should_update_billing:
+        con.execute(
+            """
+            UPDATE site_billing
+            SET plan = ?, status = ?, current_period_ends_at = ?, payment_provider = 'google_play',
+                external_customer_id = ?, updated_at = datetime('now')
+            WHERE site_code = ?
+            """,
+            (plan, status, expires_at, order_id, site_code),
+        )
+
+
+def apply_google_play_subscription_verification(
+    *,
+    site_code: str,
+    username: str,
+    package_name: str,
+    product_id: str,
+    purchase_token: str,
+) -> dict[str, Any]:
+    plan = plan_for_google_play_product(product_id)
+    subscription = fetch_google_play_subscription(package_name, purchase_token)
+    line_items = subscription.get("lineItems") if isinstance(subscription.get("lineItems"), list) else []
+    line_product_ids = {str(item.get("productId")) for item in line_items if item.get("productId")}
+    if line_product_ids and product_id not in line_product_ids:
+        raise HTTPException(status_code=400, detail="구매 토큰의 상품 ID가 선택한 요금제와 다릅니다.")
+
+    status, entitlement_active = google_subscription_status(subscription)
+    acknowledgement_state = str(subscription.get("acknowledgementState") or "")
+    acknowledged = acknowledgement_state == "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED"
+    if GOOGLE_PLAY_AUTO_ACKNOWLEDGE and entitlement_active and not acknowledged:
+        acknowledge_google_play_subscription(package_name, product_id, purchase_token)
+        acknowledged = True
+        acknowledgement_state = "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED"
+        subscription["acknowledgementState"] = acknowledgement_state
+
+    with connect() as con:
+        ensure_site_billing_row(con, site_code)
+        save_google_play_purchase(
+            con=con,
+            site_code=site_code,
+            username=username,
+            package_name=package_name,
+            product_id=product_id,
+            plan=plan,
+            purchase_token=purchase_token,
+            subscription=subscription,
+            status=status,
+        )
+        con.commit()
+
+    return {
+        "verified": True,
+        "entitlement_active": entitlement_active,
+        "plan": plan,
+        "google_play": {
+            "package_name": package_name,
+            "product_id": product_id,
+            "subscription_state": subscription.get("subscriptionState"),
+            "acknowledgement_state": acknowledgement_state,
+            "acknowledged": acknowledged,
+            "order_id": subscription.get("latestOrderId"),
+            "expires_at": latest_google_expiry(line_items),
+        },
+        "billing_status": billing_status_for_site(site_code),
+    }
 
 
 def current_site_code(request: Request) -> str:
@@ -915,6 +1192,82 @@ def api_billing_inquiry_create(request: Request, payload: BillingInquiryRequest)
         )
         con.commit()
     return billing_status_for_site(site_code)
+
+
+@app.get("/api/billing/google-play/config")
+def api_google_play_billing_config(request: Request):
+    ensure_ready()
+    require_role(request, {"admin"})
+    return {
+        "enabled": BILLING_PROVIDER == "google_play",
+        "configured": google_play_configured(),
+        "package_name": GOOGLE_PLAY_PACKAGE_NAME,
+        "products": {code: google_play_product_id_for_plan(code) for code in ("starter", "standard", "pro")},
+    }
+
+
+@app.post("/api/billing/google-play/verify")
+def api_google_play_billing_verify(request: Request, payload: GooglePlayVerifyRequest):
+    ensure_ready()
+    session = require_role(request, {"admin"})
+    site_code = current_site_code(request)
+    username = str(session.get("u") or "")
+    product_id = normalize_google_play_product_id(payload.product_id)
+    purchase_token = normalize_purchase_token(payload.purchase_token)
+    package_name = str(payload.package_name or GOOGLE_PLAY_PACKAGE_NAME).strip() or GOOGLE_PLAY_PACKAGE_NAME
+    if package_name != GOOGLE_PLAY_PACKAGE_NAME:
+        raise HTTPException(status_code=400, detail="Google Play 패키지명이 서버 설정과 다릅니다.")
+
+    return apply_google_play_subscription_verification(
+        site_code=site_code,
+        username=username,
+        package_name=package_name,
+        product_id=product_id,
+        purchase_token=purchase_token,
+    )
+
+
+@app.post("/api/billing/google-play/rtdn")
+async def api_google_play_billing_rtdn(request: Request):
+    ensure_ready()
+    if not GOOGLE_PLAY_RTDN_TOKEN:
+        raise HTTPException(status_code=404, detail="Google Play RTDN 수신이 설정되지 않았습니다.")
+    provided_token = request.headers.get("x-parking-webhook-token") or request.query_params.get("token")
+    if provided_token != GOOGLE_PLAY_RTDN_TOKEN:
+        raise HTTPException(status_code=403, detail="Google Play RTDN 토큰이 올바르지 않습니다.")
+
+    try:
+        body = await request.json()
+        encoded_data = body.get("message", {}).get("data", "")
+        notification = json.loads(base64.b64decode(encoded_data).decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Google Play RTDN 메시지를 해석할 수 없습니다.") from exc
+
+    subscription = notification.get("subscriptionNotification") or {}
+    product_id = normalize_google_play_product_id(subscription.get("subscriptionId"))
+    purchase_token = normalize_purchase_token(subscription.get("purchaseToken"))
+
+    with connect() as con:
+        row = con.execute(
+            """
+            SELECT site_code, username, package_name
+            FROM google_play_purchases
+            WHERE purchase_token = ?
+            ORDER BY verified_at DESC
+            LIMIT 1
+            """,
+            (purchase_token,),
+        ).fetchone()
+    if not row:
+        return {"ignored": True, "reason": "unknown_purchase_token"}
+
+    return apply_google_play_subscription_verification(
+        site_code=row["site_code"],
+        username=row["username"],
+        package_name=row["package_name"] or GOOGLE_PLAY_PACKAGE_NAME,
+        product_id=product_id,
+        purchase_token=purchase_token,
+    )
 
 
 @app.get("/api/users")

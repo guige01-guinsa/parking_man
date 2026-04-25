@@ -117,6 +117,24 @@ CREATE TABLE IF NOT EXISTS billing_inquiries (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS google_play_purchases (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  site_code TEXT NOT NULL,
+  username TEXT NOT NULL,
+  package_name TEXT NOT NULL,
+  product_id TEXT NOT NULL,
+  plan TEXT NOT NULL,
+  purchase_token TEXT NOT NULL UNIQUE,
+  order_id TEXT,
+  subscription_state TEXT,
+  acknowledgement_state TEXT,
+  expires_at TEXT,
+  raw_response_json TEXT,
+  verified_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_vehicles_site_plate ON vehicles(site_code, plate);
 CREATE INDEX IF NOT EXISTS idx_enforcement_site_created_at ON enforcement_events(site_code, created_at);
 CREATE INDEX IF NOT EXISTS idx_cctv_requests_site_requester ON cctv_search_requests(site_code, requester_username);
@@ -128,3 +146,4 @@ CREATE INDEX IF NOT EXISTS idx_ocr_feedback_site_suggested ON ocr_feedback(site_
 CREATE INDEX IF NOT EXISTS idx_ocr_feedback_site_corrected ON ocr_feedback(site_code, corrected_plate);
 CREATE INDEX IF NOT EXISTS idx_sites_created_at ON sites(created_at);
 CREATE INDEX IF NOT EXISTS idx_billing_inquiries_site_created_at ON billing_inquiries(site_code, created_at);
+CREATE INDEX IF NOT EXISTS idx_google_play_purchases_site_verified ON google_play_purchases(site_code, verified_at);

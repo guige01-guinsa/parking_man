@@ -757,6 +757,73 @@ function billingMetricLabel(metric) {
   }[metric] || metric;
 }
 
+function playBillingBridge() {
+  return window.ParkingBilling && typeof window.ParkingBilling.purchase === "function" ? window.ParkingBilling : null;
+}
+
+function playBillingActionMarkup(plan, isCurrent, playBillingRequired) {
+  if (!playBillingRequired) {
+    return "";
+  }
+  const productId = plan.google_play_product_id || "";
+  if (isCurrent) {
+    return '<div class="subtle">현재 적용 중인 Google Play 구독입니다.</div>';
+  }
+  if (!productId) {
+    return '<div class="subtle">Google Play 상품 ID가 설정되지 않았습니다.</div>';
+  }
+  if (!playBillingBridge()) {
+    return '<div class="subtle">Android 앱에서 로그인하면 Google Play 구독 버튼이 표시됩니다.</div>';
+  }
+  return `<button type="button" class="primary-btn billing-play-btn" data-play-subscribe="${escapeHtml(productId)}">Google Play 구독</button>`;
+}
+
+function attachPlayBillingHandlers(root = document) {
+  root.querySelectorAll("[data-play-subscribe]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const bridge = playBillingBridge();
+      if (!bridge) {
+        alert("Google Play 결제는 Android 앱에서 사용할 수 있습니다.");
+        return;
+      }
+      const productId = button.dataset.playSubscribe || "";
+      setStatus("Google Play 구독 화면을 여는 중", "active");
+      bridge.purchase(productId, `${currentSiteCode || "site"}:${currentUsername || "user"}`);
+    });
+  });
+}
+
+async function verifyPlayPurchase(productId, purchaseToken) {
+  if (!productId || !purchaseToken) {
+    alert("Google Play 구매 정보를 확인할 수 없습니다.");
+    return;
+  }
+  setStatus("Google Play 구독 검증 중", "active");
+  const data = await fetchJson(apiUrl("/api/billing/google-play/verify"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      product_id: productId,
+      purchase_token: purchaseToken,
+    }),
+  });
+  renderBillingStatus(data.billing_status);
+  setStatus(data.entitlement_active ? "Google Play 구독 적용 완료" : "구독 상태 확인 필요", data.entitlement_active ? "success" : "warn");
+}
+
+window.handleParkingPlayPurchase = (productId, purchaseToken) => {
+  verifyPlayPurchase(productId, purchaseToken).catch((error) => alert(error.message));
+};
+
+window.handleParkingPlayBillingError = (message) => {
+  alert(message || "Google Play 결제 처리 중 오류가 발생했습니다.");
+};
+
+window.addEventListener("parkingPlayPurchase", (event) => {
+  const detail = event.detail || {};
+  verifyPlayPurchase(detail.productId, detail.purchaseToken).catch((error) => alert(error.message));
+});
+
 function renderBillingStatus(status) {
   if (!billingStatus) return;
   const billing = status?.billing || {};
@@ -783,18 +850,22 @@ function renderBillingStatus(status) {
     .join("");
   const plans = Array.isArray(status?.plans) ? status.plans : [];
   const planMarkup = plans
-    .map((plan) => `
-      <article class="billing-plan-card ${plan.code === planCode ? "is-current" : ""}">
-        <div class="result-top">
-          <strong>${escapeHtml(plan.name)}</strong>
-          <span class="result-badge ${plan.code === planCode ? "badge-ok" : "badge-idle"}">${plan.code === planCode ? "현재" : "선택 가능"}</span>
-        </div>
-        <div class="billing-price">${escapeHtml(plan.display_price || "-")}</div>
-        <div class="subtle">사용자 ${escapeHtml(formatLimit(plan.users_limit))}명 · 차량 ${escapeHtml(formatLimit(plan.vehicles_limit))}대</div>
-        <div class="subtle">단속 ${escapeHtml(formatLimit(plan.monthly_records_limit))}건/월 · CCTV ${escapeHtml(formatLimit(plan.monthly_cctv_limit))}건/월</div>
-        <div class="subtle">${escapeHtml(plan.support || "-")}</div>
-      </article>
-    `)
+    .map((plan) => {
+      const isCurrent = plan.code === planCode;
+      return `
+        <article class="billing-plan-card ${isCurrent ? "is-current" : ""}">
+          <div class="result-top">
+            <strong>${escapeHtml(plan.name)}</strong>
+            <span class="result-badge ${isCurrent ? "badge-ok" : "badge-idle"}">${isCurrent ? "현재" : "선택 가능"}</span>
+          </div>
+          <div class="billing-price">${escapeHtml(plan.display_price || "-")}</div>
+          <div class="subtle">사용자 ${escapeHtml(formatLimit(plan.users_limit))}명 · 차량 ${escapeHtml(formatLimit(plan.vehicles_limit))}대</div>
+          <div class="subtle">단속 ${escapeHtml(formatLimit(plan.monthly_records_limit))}건/월 · CCTV ${escapeHtml(formatLimit(plan.monthly_cctv_limit))}건/월</div>
+          <div class="subtle">${escapeHtml(plan.support || "-")}</div>
+          ${playBillingActionMarkup(plan, isCurrent, Boolean(status?.play_billing_required))}
+        </article>
+      `;
+    })
     .join("");
   const inquiries = Array.isArray(status?.latest_inquiries) ? status.latest_inquiries : [];
   const inquiryMarkup = inquiries.length
@@ -837,6 +908,7 @@ function renderBillingStatus(status) {
       ${inquiryMarkup}
     </div>
   `;
+  attachPlayBillingHandlers(billingStatus);
 }
 
 function toDateTimeLocal(date) {

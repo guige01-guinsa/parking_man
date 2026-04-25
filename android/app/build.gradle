@@ -1,0 +1,36 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.parkingmanagement.app"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.parkingmanagement.app"
+        minSdk 23
+        targetSdk 35
+        versionCode 1
+        versionName "1.0.0"
+
+        buildConfigField "String", "APP_URL", "\"https://parking-man.onrender.com\""
+        buildConfigField "String", "STARTER_PRODUCT_ID", "\"parking_starter_monthly\""
+        buildConfigField "String", "STANDARD_PRODUCT_ID", "\"parking_standard_monthly\""
+        buildConfigField "String", "PRO_PRODUCT_ID", "\"parking_pro_monthly\""
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+}
+
+dependencies {
+    implementation "com.android.billingclient:billing:8.3.0"
+}

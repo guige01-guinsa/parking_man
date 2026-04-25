@@ -949,6 +949,11 @@ summary:focus-visible {
   background: rgba(240, 250, 247, 0.92);
 }
 
+.billing-play-btn {
+  width: 100%;
+  min-height: 40px;
+}
+
 .billing-inquiry-list {
   grid-column: 1 / -1;
 }

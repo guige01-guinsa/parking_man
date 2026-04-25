@@ -52,6 +52,16 @@
 - `PARKING_BILLING_ENFORCEMENT_ENABLED=1`을 설정하면 사용자 수, 월 단속 기록, 월 CCTV 요청 한도를 서버에서 차단합니다. 운영 전환 전까지는 기본값 `0`으로 두면 기존 현장 업무를 막지 않습니다.
 - `PARKING_BILLING_PROVIDER=google_play`는 Google Play 결제 연동 운영 모드입니다. Google Play에 배포한 앱에서 디지털 구독이나 앱 기능 이용권을 판매하려면 Android 앱 쪽에 Google Play Billing 연동이 필요합니다.
 
+### Google Play 인앱 구독
+
+- `android/`에는 `https://parking-man.onrender.com`을 표시하는 Android WebView 래퍼가 포함되어 있습니다.
+- Android 앱은 Google Play Billing Library `8.3.0`으로 `parking_starter_monthly`, `parking_standard_monthly`, `parking_pro_monthly` 구독 상품을 조회하고 구매 화면을 엽니다.
+- 구매 완료 후 Android 앱이 웹 화면에 구매 토큰을 전달하면 서버의 `/api/billing/google-play/verify`가 Google Play Developer API로 토큰을 검증하고 아파트 요금제를 갱신합니다.
+- 운영 서버에는 `PARKING_BILLING_PROVIDER=google_play`, `PARKING_GOOGLE_PLAY_PACKAGE_NAME`, `PARKING_GOOGLE_PLAY_PRODUCT_*`, `PARKING_GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` 또는 `PARKING_GOOGLE_PLAY_SERVICE_ACCOUNT_FILE`을 설정해야 합니다.
+- Play Console의 Real-time developer notifications는 `/api/billing/google-play/rtdn?token=<PARKING_GOOGLE_PLAY_RTDN_TOKEN>`으로 연결하면 기존 구매 토큰의 갱신/취소 상태를 서버가 다시 검증합니다.
+- Play Console에는 Android 패키지명과 동일한 앱, 위 상품 ID의 구독 상품, Android Publisher 권한이 있는 서비스 계정 연결이 필요합니다.
+- Android Studio에서 `android/` 폴더를 열고 릴리스 서명 키를 설정한 뒤 AAB를 빌드해 Play Console에 업로드합니다.
+
 ## Excel 컬럼 예시
 
 다음 헤더를 자동 인식합니다. 한국어/영문 혼용도 일부 허용합니다.

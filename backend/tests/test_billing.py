@@ -1,6 +1,9 @@
 import tempfile
 import unittest
+import base64
+import json
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -17,6 +20,12 @@ class BillingTests(unittest.TestCase):
         self.original_billing_provider = main.BILLING_PROVIDER
         self.original_billing_enforcement = main.BILLING_ENFORCEMENT_ENABLED
         self.original_sales_contact_url = main.SALES_CONTACT_URL
+        self.original_google_play_package = main.GOOGLE_PLAY_PACKAGE_NAME
+        self.original_google_play_service_account_json = main.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON
+        self.original_google_play_service_account_file = main.GOOGLE_PLAY_SERVICE_ACCOUNT_FILE
+        self.original_google_play_auto_acknowledge = main.GOOGLE_PLAY_AUTO_ACKNOWLEDGE
+        self.original_google_play_rtdn_token = main.GOOGLE_PLAY_RTDN_TOKEN
+        self.original_google_play_product_ids = dict(main.GOOGLE_PLAY_PRODUCT_IDS)
 
         db.DB_PATH = Path(self.temp_dir.name) / "parking-test.db"
         db.SEED_DEMO = False
@@ -25,6 +34,16 @@ class BillingTests(unittest.TestCase):
         main.BILLING_PROVIDER = "manual"
         main.BILLING_ENFORCEMENT_ENABLED = False
         main.SALES_CONTACT_URL = ""
+        main.GOOGLE_PLAY_PACKAGE_NAME = "com.parkingmanagement.app"
+        main.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON = ""
+        main.GOOGLE_PLAY_SERVICE_ACCOUNT_FILE = ""
+        main.GOOGLE_PLAY_AUTO_ACKNOWLEDGE = True
+        main.GOOGLE_PLAY_RTDN_TOKEN = ""
+        main.GOOGLE_PLAY_PRODUCT_IDS = {
+            "starter": "parking_starter_monthly",
+            "standard": "parking_standard_monthly",
+            "pro": "parking_pro_monthly",
+        }
 
         db.init_db()
         db.seed_users()
@@ -38,6 +57,12 @@ class BillingTests(unittest.TestCase):
         main.BILLING_PROVIDER = self.original_billing_provider
         main.BILLING_ENFORCEMENT_ENABLED = self.original_billing_enforcement
         main.SALES_CONTACT_URL = self.original_sales_contact_url
+        main.GOOGLE_PLAY_PACKAGE_NAME = self.original_google_play_package
+        main.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON = self.original_google_play_service_account_json
+        main.GOOGLE_PLAY_SERVICE_ACCOUNT_FILE = self.original_google_play_service_account_file
+        main.GOOGLE_PLAY_AUTO_ACKNOWLEDGE = self.original_google_play_auto_acknowledge
+        main.GOOGLE_PLAY_RTDN_TOKEN = self.original_google_play_rtdn_token
+        main.GOOGLE_PLAY_PRODUCT_IDS = self.original_google_play_product_ids
         db.SEED_DEMO = self.original_seed_demo
         db.DB_PATH = self.original_db_path
         self.temp_dir.cleanup()
@@ -111,6 +136,110 @@ class BillingTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 402)
         self.assertIn("요금제", response.json()["detail"])
+
+    def test_google_play_status_exposes_product_ids(self):
+        main.BILLING_PROVIDER = "google_play"
+        response = self.client.get("/api/billing/status")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["play_billing_required"])
+        self.assertEqual(body["google_play"]["products"]["standard"], "parking_standard_monthly")
+        self.assertEqual(
+            [plan["google_play_product_id"] for plan in body["plans"]],
+            ["parking_starter_monthly", "parking_standard_monthly", "parking_pro_monthly"],
+        )
+
+    def test_google_play_verify_updates_site_plan(self):
+        main.BILLING_PROVIDER = "google_play"
+        subscription = {
+            "subscriptionState": "SUBSCRIPTION_STATE_ACTIVE",
+            "acknowledgementState": "ACKNOWLEDGEMENT_STATE_PENDING",
+            "latestOrderId": "GPA.1234-5678-9012-34567",
+            "lineItems": [
+                {
+                    "productId": "parking_standard_monthly",
+                    "expiryTime": "2099-01-01T00:00:00Z",
+                }
+            ],
+        }
+
+        with patch.object(main, "fetch_google_play_subscription", return_value=subscription), patch.object(
+            main, "acknowledge_google_play_subscription", return_value=True
+        ):
+            response = self.client.post(
+                "/api/billing/google-play/verify",
+                json={"product_id": "parking_standard_monthly", "purchase_token": "token-123"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["entitlement_active"])
+        self.assertEqual(body["plan"], "standard")
+        self.assertEqual(body["billing_status"]["billing"]["plan"], "standard")
+        self.assertEqual(body["billing_status"]["billing"]["status"], "active")
+
+        with db.connect() as con:
+            billing = con.execute("SELECT plan, status, payment_provider FROM site_billing").fetchone()
+            purchase = con.execute("SELECT product_id, plan, acknowledgement_state FROM google_play_purchases").fetchone()
+        self.assertEqual(billing["plan"], "standard")
+        self.assertEqual(billing["payment_provider"], "google_play")
+        self.assertEqual(purchase["product_id"], "parking_standard_monthly")
+        self.assertEqual(purchase["acknowledgement_state"], "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED")
+
+    def test_google_play_rtdn_revalidates_known_purchase_token(self):
+        main.BILLING_PROVIDER = "google_play"
+        main.GOOGLE_PLAY_RTDN_TOKEN = "secret-token"
+        with db.connect() as con:
+            con.execute(
+                """
+                INSERT INTO google_play_purchases
+                (site_code, username, package_name, product_id, plan, purchase_token)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "APT1100",
+                    "admin",
+                    "com.parkingmanagement.app",
+                    "parking_standard_monthly",
+                    "standard",
+                    "known-token",
+                ),
+            )
+            con.commit()
+
+        notification = {
+            "version": "1.0",
+            "packageName": "com.parkingmanagement.app",
+            "eventTimeMillis": "4070908800000",
+            "subscriptionNotification": {
+                "version": "1.0",
+                "notificationType": 4,
+                "purchaseToken": "known-token",
+                "subscriptionId": "parking_standard_monthly",
+            },
+        }
+        encoded = base64.b64encode(json.dumps(notification).encode("utf-8")).decode("ascii")
+        subscription = {
+            "subscriptionState": "SUBSCRIPTION_STATE_CANCELED",
+            "acknowledgementState": "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED",
+            "latestOrderId": "GPA.9999",
+            "lineItems": [
+                {
+                    "productId": "parking_standard_monthly",
+                    "expiryTime": "2099-01-01T00:00:00Z",
+                }
+            ],
+        }
+
+        with patch.object(main, "fetch_google_play_subscription", return_value=subscription):
+            response = self.client.post(
+                "/api/billing/google-play/rtdn?token=secret-token",
+                json={"message": {"data": encoded}},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["billing_status"]["billing"]["plan"], "standard")
 
 
 if __name__ == "__main__":
