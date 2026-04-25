@@ -220,9 +220,11 @@ textarea {
 .pick-button {
   border: 0;
   border-radius: 999px;
-  min-height: 48px;
-  padding: 0 18px;
+  min-height: 42px;
+  padding: 0 14px;
   font-weight: 800;
+  line-height: 1.2;
+  word-break: keep-all;
   cursor: pointer;
   transition: transform 180ms ease, box-shadow 180ms ease, background 180ms ease;
 }
@@ -449,8 +451,8 @@ summary:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 60px;
-  padding: 0 18px;
+  min-height: 52px;
+  padding: 0 14px;
   color: white;
   background: linear-gradient(135deg, #223550, #101b2a);
   box-shadow: 0 14px 30px rgba(16, 27, 42, 0.22);
@@ -464,7 +466,7 @@ summary:focus-visible {
 }
 
 .action-tall {
-  min-height: 60px;
+  min-height: 52px;
 }
 
 .field-grid {
@@ -489,13 +491,15 @@ summary:focus-visible {
 .candidate-chip {
   display: inline-flex;
   align-items: center;
-  min-height: 42px;
-  padding: 0 14px;
+  min-height: 36px;
+  padding: 0 12px;
   border-radius: 999px;
   border: 1px solid rgba(31, 36, 40, 0.12);
   background: white;
   cursor: pointer;
   font-weight: 700;
+  line-height: 1.2;
+  word-break: keep-all;
 }
 
 .quick-chip.is-active,
@@ -648,8 +652,8 @@ summary:focus-visible {
 }
 
 .match-nav-btn {
-  min-width: 44px;
-  min-height: 44px;
+  min-width: 38px;
+  min-height: 38px;
   border: 1px solid rgba(255, 255, 255, 0.24);
   border-radius: 999px;
   color: white;
@@ -666,8 +670,8 @@ summary:focus-visible {
 .match-counter {
   display: inline-flex;
   align-items: center;
-  min-height: 36px;
-  padding: 0 12px;
+  min-height: 32px;
+  padding: 0 10px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.14);
   font-weight: 800;
@@ -765,14 +769,16 @@ summary:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 34px;
-  padding: 0 12px;
+  min-height: 30px;
+  padding: 0 10px;
   border: 1px solid rgba(15, 118, 110, 0.2);
   border-radius: 999px;
   color: var(--brand-deep);
   background: rgba(15, 118, 110, 0.08);
   font-size: 13px;
   font-weight: 800;
+  line-height: 1.2;
+  word-break: keep-all;
   text-decoration: none;
 }
 
@@ -1093,7 +1099,7 @@ summary:focus-visible {
   }
 
   .mobile-tab-btn {
-    min-height: 48px;
+    min-height: 42px;
     padding: 0 6px;
     border: 0;
     border-radius: 16px;
@@ -1101,6 +1107,8 @@ summary:focus-visible {
     background: transparent;
     font-size: 13px;
     font-weight: 900;
+    line-height: 1.15;
+    word-break: keep-all;
     cursor: pointer;
   }
 

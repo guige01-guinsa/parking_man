@@ -90,6 +90,59 @@ class UserManagementTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 409)
 
+    def test_user_list_supports_search_role_filter_and_pagination(self):
+        for username, role in [
+            ("guard02", "guard"),
+            ("staff02", "staff"),
+            ("cleaner02", "cleaner"),
+        ]:
+            created = self.client.post(
+                "/api/users",
+                json={"username": username, "password": "password123", "role": role},
+            )
+            self.assertEqual(created.status_code, 200)
+
+        first_page = self.client.get("/api/users", params={"limit": 2, "offset": 0})
+        second_page = self.client.get("/api/users", params={"limit": 2, "offset": 2})
+        searched = self.client.get("/api/users", params={"q": "staff02"})
+        guards = self.client.get("/api/users", params={"role": "guard"})
+
+        self.assertEqual(first_page.status_code, 200)
+        self.assertEqual(second_page.status_code, 200)
+        self.assertEqual(searched.status_code, 200)
+        self.assertEqual(guards.status_code, 200)
+        self.assertEqual(len(first_page.json()), 2)
+        self.assertGreaterEqual(len(second_page.json()), 2)
+        self.assertEqual([row["username"] for row in searched.json()], ["staff02"])
+        self.assertIn("guard02", [row["username"] for row in guards.json()])
+
+    def test_site_list_supports_search_and_pagination(self):
+        for site_code, name, admin_username in [
+            ("APT2200", "테스트 2단지", "admin2200"),
+            ("APT3300", "테스트 3단지", "admin3300"),
+        ]:
+            created = self.client.post(
+                "/api/sites",
+                json={
+                    "site_code": site_code,
+                    "name": name,
+                    "admin_username": admin_username,
+                    "admin_password": "password123",
+                },
+            )
+            self.assertEqual(created.status_code, 200)
+
+        first_page = self.client.get("/api/sites", params={"limit": 2, "offset": 0})
+        second_page = self.client.get("/api/sites", params={"limit": 2, "offset": 2})
+        searched = self.client.get("/api/sites", params={"q": "3300"})
+
+        self.assertEqual(first_page.status_code, 200)
+        self.assertEqual(second_page.status_code, 200)
+        self.assertEqual(searched.status_code, 200)
+        self.assertEqual(len(first_page.json()), 2)
+        self.assertEqual(len(second_page.json()), 1)
+        self.assertEqual([row["site_code"] for row in searched.json()], ["APT3300"])
+
     def test_same_username_can_login_to_different_sites_and_data_is_isolated(self):
         created_site = self.client.post(
             "/api/sites",

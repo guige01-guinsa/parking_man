@@ -39,6 +39,11 @@ const newUserUsernameInput = document.getElementById("new-user-username");
 const newUserPasswordInput = document.getElementById("new-user-password");
 const newUserRoleInput = document.getElementById("new-user-role");
 const userRefreshBtn = document.getElementById("user-refresh-btn");
+const userFilterForm = document.getElementById("user-filter-form");
+const userQueryInput = document.getElementById("user-query");
+const userRoleFilterInput = document.getElementById("user-role-filter");
+const userFilterResetBtn = document.getElementById("user-filter-reset-btn");
+const userLoadMoreBtn = document.getElementById("user-load-more-btn");
 const siteList = document.getElementById("site-list");
 const siteCreateForm = document.getElementById("site-create-form");
 const newSiteCodeInput = document.getElementById("new-site-code");
@@ -46,6 +51,10 @@ const newSiteNameInput = document.getElementById("new-site-name");
 const newSiteAdminUsernameInput = document.getElementById("new-site-admin-username");
 const newSiteAdminPasswordInput = document.getElementById("new-site-admin-password");
 const siteRefreshBtn = document.getElementById("site-refresh-btn");
+const siteFilterForm = document.getElementById("site-filter-form");
+const siteQueryInput = document.getElementById("site-query");
+const siteFilterResetBtn = document.getElementById("site-filter-reset-btn");
+const siteLoadMoreBtn = document.getElementById("site-load-more-btn");
 const cctvRequestForm = document.getElementById("cctv-request-form");
 const cctvPhotoInput = document.getElementById("cctv-photo");
 const cctvLocationInput = document.getElementById("cctv-location");
@@ -108,6 +117,14 @@ let cctvOffset = 0;
 let cctvHasMore = false;
 const CCTV_PAGE_SIZE = 20;
 let cctvRequestRows = [];
+let userOffset = 0;
+let userHasMore = false;
+const USER_PAGE_SIZE = 20;
+let userRows = [];
+let siteOffset = 0;
+let siteHasMore = false;
+const SITE_PAGE_SIZE = 20;
+let siteRows = [];
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -1098,16 +1115,48 @@ async function saveCctvAssignment(button) {
   setStatus(`CCTV 요청 #${requestId} 작업지시 저장 완료`, "success");
 }
 
-async function loadUsers() {
+async function loadUsers({ append = false } = {}) {
   if (!userList) return;
-  const data = await fetchJson(apiUrl("/api/users"));
-  renderUserList(data);
+  const offset = append ? userOffset : 0;
+  const params = new URLSearchParams({
+    limit: String(USER_PAGE_SIZE + 1),
+    offset: String(offset),
+  });
+  const q = userQueryInput?.value.trim() || "";
+  const role = userRoleFilterInput?.value || "";
+  if (q) params.set("q", q);
+  if (role) params.set("role", role);
+
+  const data = await fetchJson(`${apiUrl("/api/users")}?${params.toString()}`);
+  const items = Array.isArray(data) ? data.slice(0, USER_PAGE_SIZE) : [];
+  userRows = append ? [...userRows, ...items] : items;
+  renderUserList(userRows);
+  userOffset = offset + items.length;
+  userHasMore = Array.isArray(data) && data.length > USER_PAGE_SIZE;
+  if (userLoadMoreBtn) {
+    userLoadMoreBtn.hidden = !userHasMore;
+  }
 }
 
-async function loadSites() {
+async function loadSites({ append = false } = {}) {
   if (!siteList) return;
-  const data = await fetchJson(apiUrl("/api/sites"));
-  renderSiteList(data);
+  const offset = append ? siteOffset : 0;
+  const params = new URLSearchParams({
+    limit: String(SITE_PAGE_SIZE + 1),
+    offset: String(offset),
+  });
+  const q = siteQueryInput?.value.trim() || "";
+  if (q) params.set("q", q);
+
+  const data = await fetchJson(`${apiUrl("/api/sites")}?${params.toString()}`);
+  const items = Array.isArray(data) ? data.slice(0, SITE_PAGE_SIZE) : [];
+  siteRows = append ? [...siteRows, ...items] : items;
+  renderSiteList(siteRows);
+  siteOffset = offset + items.length;
+  siteHasMore = Array.isArray(data) && data.length > SITE_PAGE_SIZE;
+  if (siteLoadMoreBtn) {
+    siteLoadMoreBtn.hidden = !siteHasMore;
+  }
 }
 
 async function createSite() {
@@ -1282,6 +1331,24 @@ document.getElementById("sync-btn")?.addEventListener("click", () => syncRegistr
 uploadRegistryBtn?.addEventListener("click", () => uploadRegistryFiles().catch((error) => alert(error.message)));
 userRefreshBtn?.addEventListener("click", () => loadUsers().catch((error) => alert(error.message)));
 siteRefreshBtn?.addEventListener("click", () => loadSites().catch((error) => alert(error.message)));
+userFilterForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  loadUsers().catch((error) => alert(error.message));
+});
+userFilterResetBtn?.addEventListener("click", () => {
+  userFilterForm?.reset();
+  loadUsers().catch((error) => alert(error.message));
+});
+userLoadMoreBtn?.addEventListener("click", () => loadUsers({ append: true }).catch((error) => alert(error.message)));
+siteFilterForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  loadSites().catch((error) => alert(error.message));
+});
+siteFilterResetBtn?.addEventListener("click", () => {
+  siteFilterForm?.reset();
+  loadSites().catch((error) => alert(error.message));
+});
+siteLoadMoreBtn?.addEventListener("click", () => loadSites({ append: true }).catch((error) => alert(error.message)));
 cctvRequestForm?.addEventListener("submit", (event) => createCctvRequest(event).catch((error) => alert(error.message)));
 cctvRefreshBtn?.addEventListener("click", () => loadCctvRequests().catch((error) => alert(error.message)));
 cctvLoadMoreBtn?.addEventListener("click", () => loadCctvRequests({ append: true }).catch((error) => alert(error.message)));

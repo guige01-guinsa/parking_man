@@ -700,19 +700,37 @@ def api_me(request: Request):
 
 
 @app.get("/api/users")
-def api_users_list(request: Request):
+def api_users_list(request: Request, q: str = "", role: str = "", limit: int = 50, offset: int = 0):
     ensure_ready()
     require_role(request, {"admin"})
     site_code = current_site_code(request)
+    limit = min(max(limit, 1), 100)
+    offset = max(offset, 0)
+
+    where = ["site_code = ?"]
+    params: list[Any] = [site_code]
+    query = str(q or "").strip().lower()
+    if query:
+        where.append("username LIKE ?")
+        params.append(f"%{query}%")
+
+    normalized_role = str(role or "").strip().lower()
+    if normalized_role:
+        normalized_role = normalize_user_role(normalized_role)
+        where.append("role = ?")
+        params.append(normalized_role)
+
+    params.extend([limit, offset])
     with connect() as con:
         rows = con.execute(
             f"""
             SELECT site_code, username, role, created_at
             FROM users
-            WHERE site_code = ?
+            WHERE {' AND '.join(where)}
             ORDER BY {role_order_case()}, username
+            LIMIT ? OFFSET ?
             """,
-            (site_code,),
+            params,
         ).fetchall()
     return [user_public_dict(dict(row)) for row in rows]
 
@@ -802,12 +820,22 @@ def api_users_delete(request: Request, username: str):
 
 
 @app.get("/api/sites")
-def api_sites_list(request: Request):
+def api_sites_list(request: Request, q: str = "", limit: int = 50, offset: int = 0):
     ensure_ready()
     require_role(request, {"admin"})
+    limit = min(max(limit, 1), 100)
+    offset = max(offset, 0)
+    query = str(q or "").strip()
+    where = ""
+    params: list[Any] = []
+    if query:
+        where = "WHERE s.site_code LIKE ? OR s.name LIKE ?"
+        like = f"%{query}%"
+        params.extend([like, like])
+    params.extend([limit, offset])
     with connect() as con:
         rows = con.execute(
-            """
+            f"""
             SELECT
               s.site_code,
               s.name,
@@ -817,9 +845,12 @@ def api_sites_list(request: Request):
             FROM sites s
             LEFT JOIN users u ON u.site_code = s.site_code
             LEFT JOIN vehicles v ON v.site_code = s.site_code
+            {where}
             GROUP BY s.site_code, s.name, s.created_at
             ORDER BY s.site_code
-            """
+            LIMIT ? OFFSET ?
+            """,
+            params,
         ).fetchall()
     return [site_public_dict(dict(row)) for row in rows]
 

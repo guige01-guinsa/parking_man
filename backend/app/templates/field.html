@@ -351,7 +351,37 @@
               <button id="create-user-btn" type="submit" class="primary-btn action-tall">사용자 등록</button>
             </div>
           </form>
+          <details class="history-filter-box admin-list-filter">
+            <summary>사용자 검색</summary>
+            <form id="user-filter-form" class="history-filter-form">
+              <div class="field-grid user-form-grid">
+                <label>
+                  <span>아이디 검색</span>
+                  <input id="user-query" type="text" placeholder="예: guard">
+                </label>
+                <label>
+                  <span>권한</span>
+                  <select id="user-role-filter">
+                    <option value="">전체</option>
+                    <option value="admin">관리자</option>
+                    <option value="director">소장</option>
+                    <option value="manager">과장</option>
+                    <option value="section_chief">계장</option>
+                    <option value="team_lead">팀장</option>
+                    <option value="staff">주임</option>
+                    <option value="guard">경비</option>
+                    <option value="cleaner">미화</option>
+                  </select>
+                </label>
+              </div>
+              <div class="history-filter-actions">
+                <button type="submit" class="primary-btn">조회</button>
+                <button id="user-filter-reset-btn" type="button" class="ghost-btn">초기화</button>
+              </div>
+            </form>
+          </details>
           <div id="user-list" class="list-board empty-state">사용자 목록을 불러오는 중입니다.</div>
+          <button id="user-load-more-btn" type="button" class="secondary-btn load-more-btn" hidden>더 보기</button>
         </article>
 
         <article class="admin-section">
@@ -389,7 +419,21 @@
             </div>
             <button id="create-site-btn" type="submit" class="primary-btn action-tall">아파트 등록</button>
           </form>
+          <details class="history-filter-box admin-list-filter">
+            <summary>아파트 검색</summary>
+            <form id="site-filter-form" class="history-filter-form">
+              <label>
+                <span>아파트 코드/이름</span>
+                <input id="site-query" type="text" placeholder="예: APT2200 또는 한빛">
+              </label>
+              <div class="history-filter-actions">
+                <button type="submit" class="primary-btn">조회</button>
+                <button id="site-filter-reset-btn" type="button" class="ghost-btn">초기화</button>
+              </div>
+            </form>
+          </details>
           <div id="site-list" class="list-board empty-state">아파트 목록을 불러오는 중입니다.</div>
+          <button id="site-load-more-btn" type="button" class="secondary-btn load-more-btn" hidden>더 보기</button>
         </article>
       </div>
     </section>
