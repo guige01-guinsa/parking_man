@@ -15,4 +15,5 @@ backend/.env.production
 Thumbs.db
 .DS_Store
 ~$*.xls*
-
+.github/prompts/
+.github/skills/
