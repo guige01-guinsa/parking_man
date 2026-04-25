@@ -57,6 +57,8 @@ const cctvRefreshBtn = document.getElementById("cctv-refresh-btn");
 const geoStatus = document.getElementById("geo-status");
 const statusBanner = document.getElementById("status-banner");
 const quickMemoButtons = Array.from(document.querySelectorAll(".quick-chip"));
+const mobileTabButtons = Array.from(document.querySelectorAll("[data-mobile-tab]"));
+const mobileTabPanels = Array.from(document.querySelectorAll("[data-mobile-tab-panel]"));
 
 const USER_ROLE_OPTIONS = [
   { value: "admin", label: "관리자", badgeClass: "badge-role-admin" },
@@ -89,6 +91,7 @@ let currentCheckMatches = [];
 let currentCheckIndex = 0;
 let currentCheckRequestedPlate = "";
 let cctvAssignees = [];
+let activeMobileTab = "enforce";
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -212,6 +215,55 @@ function cctvWeightOptionsMarkup(selectedWeight) {
 function setStatus(message, tone = "idle") {
   statusBanner.textContent = message;
   statusBanner.className = `status-banner status-${tone}`;
+}
+
+function mobileTabStorageKey() {
+  return `parking:${currentSiteCode || "default"}:${currentRole || "role"}:mobile-tab`;
+}
+
+function refreshActiveMobileTab(tab) {
+  if (tab === "cctv") {
+    loadCctvRequests().catch(() => {});
+  } else if (tab === "recent") {
+    loadRecent().catch(() => {});
+  } else if (tab === "admin") {
+    loadRegistryStatus().catch(() => {});
+    loadUsers().catch(() => {});
+    loadSites().catch(() => {});
+  }
+}
+
+function activateMobileTab(tab, options = {}) {
+  const allowedTabs = new Set(mobileTabButtons.map((button) => button.dataset.mobileTab));
+  const nextTab = allowedTabs.has(tab) ? tab : "enforce";
+  activeMobileTab = nextTab;
+
+  mobileTabPanels.forEach((panel) => {
+    panel.classList.toggle("is-mobile-active", panel.dataset.mobileTabPanel === nextTab);
+  });
+  mobileTabButtons.forEach((button) => {
+    const isActive = button.dataset.mobileTab === nextTab;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-pressed", String(isActive));
+  });
+
+  localStorage.setItem(mobileTabStorageKey(), nextTab);
+  document.body.classList.add("mobile-tabs-ready");
+
+  if (options.refresh !== false) {
+    refreshActiveMobileTab(nextTab);
+  }
+  if (options.scroll !== false && window.matchMedia("(max-width: 720px)").matches) {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+}
+
+function initMobileTabs() {
+  if (!mobileTabButtons.length || !mobileTabPanels.length) {
+    return;
+  }
+  const saved = localStorage.getItem(mobileTabStorageKey()) || "enforce";
+  activateMobileTab(saved, { refresh: false, scroll: false });
 }
 
 function persistField(key, value) {
@@ -1121,6 +1173,12 @@ quickMemoButtons.forEach((button) => {
   });
 });
 
+mobileTabButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    activateMobileTab(button.dataset.mobileTab || "enforce");
+  });
+});
+
 scanBtn?.addEventListener("click", () => runScan().catch((error) => alert(error.message)));
 checkBtn?.addEventListener("click", () => runCheck().catch((error) => alert(error.message)));
 saveBtn?.addEventListener("click", () => saveEvent().catch((error) => alert(error.message)));
@@ -1156,6 +1214,7 @@ renderRegistrySelection();
 renderCandidates([]);
 renderIdleVerdict();
 setStatus("촬영 대기 중", "idle");
+initMobileTabs();
 
 loadRecent().catch((error) => {
   recentResults.className = "list-board empty-state";

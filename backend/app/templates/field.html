@@ -45,7 +45,7 @@
     </section>
 
     <section class="ops-grid">
-      <article class="panel capture-panel">
+      <article class="panel capture-panel mobile-tab-panel" data-mobile-tab-panel="enforce">
         <div class="panel-head">
           <div>
             <p class="eyebrow">Capture</p>
@@ -134,7 +134,7 @@
       </article>
 
       <aside class="side-stack">
-        <article class="panel verdict-panel">
+        <article class="panel verdict-panel mobile-tab-panel" data-mobile-tab-panel="enforce">
           <div class="panel-head">
             <div>
               <p class="eyebrow">Result</p>
@@ -164,7 +164,7 @@
           </div>
         </article>
 
-        <article class="panel mini-panel">
+        <article class="panel mini-panel mobile-tab-panel" data-mobile-tab-panel="search">
           <div class="panel-head">
             <div>
               <p class="eyebrow">Search</p>
@@ -180,7 +180,7 @@
       </aside>
     </section>
 
-    <section class="panel cctv-panel">
+    <section class="panel cctv-panel mobile-tab-panel" data-mobile-tab-panel="cctv">
       <div class="panel-head">
         <div>
           <p class="eyebrow">CCTV Request</p>
@@ -218,7 +218,7 @@
       </div>
     </section>
 
-    <section class="panel log-panel">
+    <section class="panel log-panel mobile-tab-panel" data-mobile-tab-panel="recent">
       <div class="panel-head">
         <div>
           <p class="eyebrow">Recent</p>
@@ -229,7 +229,7 @@
     </section>
 
     {% if is_admin %}
-    <section class="panel admin-panel">
+    <section class="panel admin-panel mobile-tab-panel" data-mobile-tab-panel="admin">
       <div class="panel-head">
         <div>
           <p class="eyebrow">Admin</p>
@@ -346,6 +346,16 @@
     </section>
     {% endif %}
   </main>
+
+  <nav class="mobile-tabbar" aria-label="모바일 업무 메뉴">
+    <button type="button" class="mobile-tab-btn" data-mobile-tab="enforce">단속</button>
+    <button type="button" class="mobile-tab-btn" data-mobile-tab="search">검색</button>
+    <button type="button" class="mobile-tab-btn" data-mobile-tab="cctv">CCTV</button>
+    <button type="button" class="mobile-tab-btn" data-mobile-tab="recent">최근</button>
+    {% if is_admin %}
+    <button type="button" class="mobile-tab-btn" data-mobile-tab="admin">관리</button>
+    {% endif %}
+  </nav>
 
   <script src="{{ request.url_for('static', path='app.js') }}"></script>
 </body>

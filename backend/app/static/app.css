@@ -952,6 +952,10 @@ summary:focus-visible {
   background: var(--idle);
 }
 
+.mobile-tabbar {
+  display: none;
+}
+
 .bg-orb {
   position: fixed;
   width: 320px;
@@ -998,8 +1002,88 @@ summary:focus-visible {
     padding: 16px;
   }
 
+  .app-body.mobile-tabs-ready .app-shell {
+    padding-bottom: 96px;
+  }
+
   .auth-card {
     padding: 28px 24px;
+  }
+
+  .app-body.mobile-tabs-ready .hero-card {
+    display: none;
+  }
+
+  .app-body.mobile-tabs-ready .ops-grid,
+  .app-body.mobile-tabs-ready .side-stack {
+    display: contents;
+  }
+
+  .app-body.mobile-tabs-ready .mobile-tab-panel {
+    display: none;
+    margin-top: 0;
+  }
+
+  .app-body.mobile-tabs-ready .mobile-tab-panel.is-mobile-active {
+    display: block;
+  }
+
+  .app-body.mobile-tabs-ready .mobile-tab-panel.is-mobile-active + .mobile-tab-panel.is-mobile-active {
+    margin-top: 12px;
+  }
+
+  .app-body.mobile-tabs-ready .mobile-tabbar {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    z-index: 20;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(58px, 1fr));
+    gap: 6px;
+    padding: 8px;
+    border: 1px solid rgba(26, 35, 40, 0.12);
+    border-radius: 22px;
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: 0 18px 50px rgba(15, 23, 42, 0.18);
+    backdrop-filter: blur(18px);
+  }
+
+  .mobile-tab-btn {
+    min-height: 48px;
+    padding: 0 6px;
+    border: 0;
+    border-radius: 16px;
+    color: var(--muted);
+    background: transparent;
+    font-size: 13px;
+    font-weight: 900;
+    cursor: pointer;
+  }
+
+  .mobile-tab-btn.is-active {
+    color: white;
+    background: linear-gradient(135deg, var(--brand), var(--brand-deep));
+    box-shadow: 0 10px 22px rgba(15, 118, 110, 0.22);
+  }
+
+  .app-body.mobile-tabs-ready .verdict-panel.is-mobile-active {
+    margin-top: 12px;
+  }
+
+  .panel,
+  .hero-card {
+    padding: 18px;
+    border-radius: 22px;
+  }
+
+  .topbar {
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  .topbar h1 {
+    font-size: 22px;
   }
 
   .topbar,
@@ -1038,7 +1122,30 @@ summary:focus-visible {
   }
 
   .preview-shell {
-    min-height: 240px;
+    min-height: 210px;
+  }
+
+  .verdict-card {
+    min-height: 220px;
+    padding: 18px;
+    border-radius: 20px;
+  }
+
+  .verdict-card h4 {
+    font-size: 26px;
+  }
+
+  #ocr-note,
+  .ocr-details {
+    display: none;
+  }
+
+  .note-box,
+  .status-board,
+  .list-board,
+  .geo-box,
+  .admin-upload-box {
+    border-radius: 18px;
   }
 
   .status-banner {
