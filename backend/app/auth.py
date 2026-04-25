@@ -50,6 +50,8 @@ def require_login(request: Request) -> dict:
 
 def require_role(request: Request, roles: set[str]) -> dict:
     session = require_login(request)
+    if session.get("r") == "viewer":
+        session["r"] = "cleaner"
     if session.get("r") not in roles:
         raise HTTPException(status_code=403, detail="권한이 없습니다.")
     return session

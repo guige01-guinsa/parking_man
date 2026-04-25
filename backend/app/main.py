@@ -88,13 +88,22 @@ class CctvAssignmentRequest(BaseModel):
     status: str | None = None
 
 
-VALID_USER_ROLES = {"admin", "guard", "viewer"}
 USERNAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{2,31}$")
 ROLE_LABELS = {
     "admin": "관리자",
+    "director": "소장",
+    "manager": "과장",
+    "section_chief": "계장",
+    "team_lead": "팀장",
+    "staff": "주임",
     "guard": "경비",
-    "viewer": "조회",
+    "cleaner": "미화",
 }
+VALID_USER_ROLES = set(ROLE_LABELS)
+ROLE_ORDER = list(ROLE_LABELS)
+VIEW_ROLES = set(ROLE_LABELS)
+ENFORCEMENT_WRITE_ROLES = {"admin", "director", "manager", "section_chief", "team_lead", "staff", "guard"}
+CCTV_ASSIGNMENT_ROLES = {"admin", "director", "manager", "section_chief", "team_lead"}
 CCTV_STATUS_LABELS = {
     "requested": "요청",
     "assigned": "배정",
@@ -109,6 +118,11 @@ def app_url(path: str) -> str:
     if not path.startswith("/"):
         path = f"/{path}"
     return f"{ROOT_PATH}{path}" if ROOT_PATH else path
+
+
+def role_order_case(column: str = "role") -> str:
+    clauses = " ".join(f"WHEN '{role}' THEN {index}" for index, role in enumerate(ROLE_ORDER))
+    return f"CASE {column} {clauses} ELSE {len(ROLE_ORDER)} END"
 
 
 def session_cookie_path() -> str:
@@ -301,7 +315,8 @@ def normalize_username(value: str | None) -> str:
 def normalize_user_role(value: str | None) -> str:
     role = str(value or "").strip().lower()
     if role not in VALID_USER_ROLES:
-        raise HTTPException(status_code=400, detail="권한은 admin, guard, viewer 중 하나여야 합니다.")
+        labels = ", ".join(ROLE_LABELS.values())
+        raise HTTPException(status_code=400, detail=f"권한은 {labels} 중 하나여야 합니다.")
     return role
 
 
@@ -427,8 +442,8 @@ def normalize_cctv_assignee(con, username: str | None) -> str | None:
     row = con.execute("SELECT username, role FROM users WHERE username = ?", (assignee,)).fetchone()
     if not row:
         raise HTTPException(status_code=400, detail="담당자 계정을 찾을 수 없습니다.")
-    if row["role"] not in {"admin", "guard"}:
-        raise HTTPException(status_code=400, detail="담당자는 관리자 또는 경비 권한이어야 합니다.")
+    if row["role"] not in VALID_USER_ROLES:
+        raise HTTPException(status_code=400, detail="담당자 권한을 다시 확인해 주세요.")
     return row["username"]
 
 
@@ -525,7 +540,7 @@ def logout():
 @app.get("/field", response_class=HTMLResponse)
 def field_page(request: Request):
     ensure_ready()
-    session = require_role(request, {"admin", "guard", "viewer"})
+    session = require_role(request, VIEW_ROLES)
     return templates.TemplateResponse(
         request=request,
         name="field.html",
@@ -544,7 +559,7 @@ def field_page(request: Request):
 @app.get("/api/me")
 def api_me(request: Request):
     ensure_ready()
-    session = require_role(request, {"admin", "guard", "viewer"})
+    session = require_role(request, VIEW_ROLES)
     return {
         "username": session.get("u"),
         "role": session.get("r"),
@@ -558,10 +573,10 @@ def api_users_list(request: Request):
     require_role(request, {"admin"})
     with connect() as con:
         rows = con.execute(
-            """
+            f"""
             SELECT username, role, created_at
             FROM users
-            ORDER BY CASE role WHEN 'admin' THEN 0 WHEN 'guard' THEN 1 ELSE 2 END, username
+            ORDER BY {role_order_case()}, username
             """
         ).fetchall()
     return [user_public_dict(dict(row)) for row in rows]
@@ -648,14 +663,13 @@ def api_users_delete(request: Request, username: str):
 @app.get("/api/cctv/assignees")
 def api_cctv_assignees(request: Request):
     ensure_ready()
-    require_role(request, {"admin"})
+    require_role(request, CCTV_ASSIGNMENT_ROLES)
     with connect() as con:
         rows = con.execute(
-            """
+            f"""
             SELECT username, role, created_at
             FROM users
-            WHERE role IN ('admin', 'guard')
-            ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, username
+            ORDER BY {role_order_case()}, username
             """
         ).fetchall()
     return [user_public_dict(dict(row)) for row in rows]
@@ -664,7 +678,7 @@ def api_cctv_assignees(request: Request):
 @app.get("/api/cctv/requests")
 def api_cctv_requests(request: Request, limit: int = 50):
     ensure_ready()
-    session = require_role(request, {"admin", "guard", "viewer"})
+    session = require_role(request, VIEW_ROLES)
     site_code = current_site_code(request)
     limit = min(max(limit, 1), 100)
 
@@ -674,7 +688,7 @@ def api_cctv_requests(request: Request, limit: int = 50):
         WHERE site_code = ?
     """
     params: list[Any] = [site_code]
-    if session.get("r") != "admin":
+    if session.get("r") not in CCTV_ASSIGNMENT_ROLES:
         base_query += " AND (requester_username = ? OR assigned_to = ?)"
         params.extend([session.get("u"), session.get("u")])
 
@@ -709,7 +723,7 @@ async def api_cctv_request_create(
     content: str = Form(...),
 ):
     ensure_ready()
-    session = require_role(request, {"admin", "guard", "viewer"})
+    session = require_role(request, VIEW_ROLES)
     site_code = current_site_code(request)
     normalized_location = require_form_text(location, "위치")
     normalized_search_start_time = require_form_text(search_start_time or search_time, "검색 시작 시간")
@@ -744,7 +758,7 @@ async def api_cctv_request_create(
 @app.patch("/api/cctv/requests/{request_id}")
 def api_cctv_request_update(request: Request, request_id: int, payload: CctvAssignmentRequest):
     ensure_ready()
-    session = require_role(request, {"admin"})
+    session = require_role(request, CCTV_ASSIGNMENT_ROLES)
     site_code = current_site_code(request)
     with connect() as con:
         current = require_cctv_request(con, site_code, request_id)
@@ -794,14 +808,14 @@ def api_cctv_request_update(request: Request, request_id: int, payload: CctvAssi
 
 @app.get("/api/registry/check", response_model=CheckResponse)
 def api_registry_check(request: Request, plate: str):
-    require_role(request, {"admin", "guard", "viewer"})
+    require_role(request, VIEW_ROLES)
     return build_check_response(current_site_code(request), plate)
 
 
 @app.get("/api/registry/search")
 def api_registry_search(request: Request, q: str = "", limit: int = 20):
     ensure_ready()
-    require_role(request, {"admin", "guard", "viewer"})
+    require_role(request, VIEW_ROLES)
     site_code = current_site_code(request)
     limit = min(max(limit, 1), 50)
     query = normalize_plate(q) or q.strip()
@@ -828,7 +842,7 @@ def api_registry_search(request: Request, q: str = "", limit: int = 20):
 @app.get("/api/registry/status")
 def api_registry_status(request: Request):
     ensure_ready()
-    require_role(request, {"admin", "guard", "viewer"})
+    require_role(request, VIEW_ROLES)
     site_code = current_site_code(request)
     with connect() as con:
         vehicle_count = con.execute("SELECT COUNT(*) AS cnt FROM vehicles WHERE site_code = ?", (site_code,)).fetchone()["cnt"]
@@ -917,7 +931,7 @@ async def api_registry_upload(request: Request, files: list[UploadFile] = File(.
 @app.post("/api/ocr/scan")
 async def api_ocr_scan(request: Request, photo: UploadFile = File(...), manual_plate: str | None = Form(None)):
     ensure_ready()
-    require_role(request, {"admin", "guard", "viewer"})
+    require_role(request, VIEW_ROLES)
     image_bytes = await photo.read()
     if not image_bytes:
         raise HTTPException(status_code=400, detail="사진 파일이 비어 있습니다.")
@@ -951,7 +965,7 @@ async def api_enforcement_submit(
     photo: UploadFile | None = File(None),
 ):
     ensure_ready()
-    require_role(request, {"admin", "guard"})
+    require_role(request, ENFORCEMENT_WRITE_ROLES)
     site_code = current_site_code(request)
     check = build_check_response(site_code, plate)
     photo_path = save_photo(photo) if photo else None
@@ -1000,7 +1014,7 @@ async def api_enforcement_submit(
 @app.get("/api/enforcement/recent")
 def api_enforcement_recent(request: Request, limit: int = 20):
     ensure_ready()
-    require_role(request, {"admin", "guard", "viewer"})
+    require_role(request, VIEW_ROLES)
     site_code = current_site_code(request)
     limit = min(max(limit, 1), 50)
     with connect() as con:

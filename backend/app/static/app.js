@@ -51,9 +51,16 @@ const quickMemoButtons = Array.from(document.querySelectorAll(".quick-chip"));
 
 const USER_ROLE_OPTIONS = [
   { value: "admin", label: "관리자", badgeClass: "badge-role-admin" },
+  { value: "director", label: "소장", badgeClass: "badge-role-director" },
+  { value: "manager", label: "과장", badgeClass: "badge-role-manager" },
+  { value: "section_chief", label: "계장", badgeClass: "badge-role-section-chief" },
+  { value: "team_lead", label: "팀장", badgeClass: "badge-role-team-lead" },
+  { value: "staff", label: "주임", badgeClass: "badge-role-staff" },
   { value: "guard", label: "경비", badgeClass: "badge-role-guard" },
-  { value: "viewer", label: "조회", badgeClass: "badge-role-viewer" },
+  { value: "cleaner", label: "미화", badgeClass: "badge-role-cleaner" },
 ];
+const CCTV_ASSIGNMENT_ROLES = new Set(["admin", "director", "manager", "section_chief", "team_lead"]);
+const currentCanAssignCctv = CCTV_ASSIGNMENT_ROLES.has(currentRole);
 const EXCEL_UPLOAD_SUFFIXES = [".xlsx", ".xlsm"];
 const CCTV_STATUS_OPTIONS = [
   { value: "requested", label: "요청", badgeClass: "badge-idle" },
@@ -160,7 +167,7 @@ function badgeClass(verdict) {
 }
 
 function userRoleOption(role) {
-  return USER_ROLE_OPTIONS.find((item) => item.value === role) || USER_ROLE_OPTIONS[2];
+  return USER_ROLE_OPTIONS.find((item) => item.value === role) || USER_ROLE_OPTIONS[USER_ROLE_OPTIONS.length - 1];
 }
 
 function userRoleOptionsMarkup(selectedRole) {
@@ -568,7 +575,7 @@ function resetUserRow(button) {
   const roleSelect = row.querySelector("[data-user-role]");
   const passwordInput = row.querySelector("[data-user-password]");
   if (roleSelect) {
-    roleSelect.value = row.dataset.originalRole || "viewer";
+    roleSelect.value = row.dataset.originalRole || "cleaner";
   }
   if (passwordInput) {
     passwordInput.value = "";
@@ -589,7 +596,7 @@ function displayDateTimeRange(startValue, endValue) {
 }
 
 function renderCctvAdminControls(row) {
-  if (currentRole !== "admin") {
+  if (!currentCanAssignCctv) {
     return "";
   }
   return `
@@ -652,7 +659,7 @@ function renderCctvRequests(rows) {
             <span>등록 ${escapeHtml(displayDateTime(row.created_at))}</span>
             ${photo}
           </div>
-          ${row.instruction && currentRole !== "admin" ? `<div class="cctv-instruction-view">작업지시: ${escapeHtml(row.instruction)}</div>` : ""}
+          ${row.instruction && !currentCanAssignCctv ? `<div class="cctv-instruction-view">작업지시: ${escapeHtml(row.instruction)}</div>` : ""}
           ${renderCctvAdminControls(row)}
         </article>
       `;
@@ -839,7 +846,7 @@ async function uploadRegistryFiles() {
 }
 
 async function loadCctvAssignees() {
-  if (currentRole !== "admin") return;
+  if (!currentCanAssignCctv) return;
   cctvAssignees = await fetchJson(apiUrl("/api/cctv/assignees"));
 }
 
@@ -949,7 +956,7 @@ async function saveUserRow(button) {
   const username = row.dataset.userRow || "";
   const roleSelect = row.querySelector("[data-user-role]");
   const passwordInput = row.querySelector("[data-user-password]");
-  const role = roleSelect?.value || row.dataset.originalRole || "viewer";
+  const role = roleSelect?.value || row.dataset.originalRole || "cleaner";
   const password = passwordInput?.value || "";
 
   setStatus(`사용자 ${username} 정보 저장 중`, "active");

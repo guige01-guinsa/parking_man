@@ -31,7 +31,7 @@
 
 - `admin / admin1234`
 - `guard / guard1234`
-- `viewer / viewer1234`
+- `cleaner / cleaner1234`
 
 첫 로그인 후 관리자 화면에서 현장 담당자 계정을 추가하고, 권한 변경 및 비밀번호 재설정을 할 수 있습니다.
 

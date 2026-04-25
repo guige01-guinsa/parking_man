@@ -55,15 +55,15 @@ class UserManagementTests(unittest.TestCase):
 
         updated = self.client.patch(
             "/api/users/guard02",
-            json={"role": "viewer", "password": "viewerpass123"},
+            json={"role": "staff", "password": "staffpass123"},
         )
         self.assertEqual(updated.status_code, 200)
-        self.assertEqual(updated.json()["role"], "viewer")
+        self.assertEqual(updated.json()["role"], "staff")
 
         relogin = TestClient(main.app)
         bad_login = self.login(relogin, "guard02", "guardpass123")
         self.assertEqual(bad_login.status_code, 401)
-        good_login = self.login(relogin, "guard02", "viewerpass123")
+        good_login = self.login(relogin, "guard02", "staffpass123")
         self.assertEqual(good_login.status_code, 302)
 
         deleted = self.client.delete("/api/users/guard02")
@@ -89,6 +89,27 @@ class UserManagementTests(unittest.TestCase):
             json={"username": "admin", "password": "admin1234", "role": "admin"},
         )
         self.assertEqual(response.status_code, 409)
+
+    def test_viewer_role_is_rejected_for_new_updates(self):
+        response = self.client.post(
+            "/api/users",
+            json={"username": "viewer02", "password": "viewerpass123", "role": "viewer"},
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_legacy_viewer_role_migrates_to_cleaner(self):
+        with db.connect() as con:
+            con.execute(
+                "INSERT INTO users(username, pw_hash, role) VALUES (?, ?, ?)",
+                ("legacyviewer", main.pbkdf2_hash("viewerpass123"), "viewer"),
+            )
+            con.commit()
+
+        db.init_db()
+
+        with db.connect() as con:
+            row = con.execute("SELECT role FROM users WHERE username = ?", ("legacyviewer",)).fetchone()
+        self.assertEqual(row["role"], "cleaner")
 
     def test_login_failure_renders_friendly_message(self):
         relogin = TestClient(main.app)

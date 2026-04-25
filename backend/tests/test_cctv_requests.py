@@ -26,6 +26,12 @@ class CctvRequestTests(unittest.TestCase):
 
         db.init_db()
         db.seed_users()
+        with db.connect() as con:
+            con.execute(
+                "INSERT INTO users(username, pw_hash, role) VALUES (?, ?, ?)",
+                ("teamlead", main.pbkdf2_hash("teamlead123"), "team_lead"),
+            )
+            con.commit()
 
     def tearDown(self):
         main.auto_sync_registry = self.original_auto_sync
@@ -54,12 +60,12 @@ class CctvRequestTests(unittest.TestCase):
         )
 
     def test_user_can_create_cctv_request(self):
-        client = self.login("viewer", "viewer1234")
+        client = self.login("cleaner", "cleaner1234")
 
         response = self.create_request(client)
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertEqual(body["requester_username"], "viewer")
+        self.assertEqual(body["requester_username"], "cleaner")
         self.assertEqual(body["status"], "requested")
         self.assertEqual(body["work_weight"], 1)
         self.assertEqual(body["search_start_time"], "2026-04-25T12:20")
@@ -71,8 +77,8 @@ class CctvRequestTests(unittest.TestCase):
         self.assertEqual(len(listing.json()), 1)
 
     def test_admin_can_assign_and_guard_can_see_assigned_request(self):
-        viewer = self.login("viewer", "viewer1234")
-        created = self.create_request(viewer)
+        cleaner = self.login("cleaner", "cleaner1234")
+        created = self.create_request(cleaner)
         request_id = created.json()["id"]
 
         admin = self.login("admin", "admin1234")
@@ -97,18 +103,31 @@ class CctvRequestTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in listing.json()], [request_id])
 
     def test_non_admin_cannot_assign_request(self):
-        viewer = self.login("viewer", "viewer1234")
-        created = self.create_request(viewer)
+        cleaner = self.login("cleaner", "cleaner1234")
+        created = self.create_request(cleaner)
         request_id = created.json()["id"]
 
-        response = viewer.patch(
+        response = cleaner.patch(
             f"/api/cctv/requests/{request_id}",
             json={"assigned_to": "guard", "work_weight": 3, "status": "assigned"},
         )
         self.assertEqual(response.status_code, 403)
 
+    def test_team_lead_can_assign_request(self):
+        cleaner = self.login("cleaner", "cleaner1234")
+        created = self.create_request(cleaner)
+        request_id = created.json()["id"]
+
+        team_lead = self.login("teamlead", "teamlead123")
+        response = team_lead.patch(
+            f"/api/cctv/requests/{request_id}",
+            json={"assigned_to": "guard", "work_weight": 3, "status": "assigned"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["assigned_by"], "teamlead")
+
     def test_cctv_request_requires_required_fields(self):
-        client = self.login("viewer", "viewer1234")
+        client = self.login("cleaner", "cleaner1234")
         response = client.post(
             "/api/cctv/requests",
             data={
@@ -123,7 +142,7 @@ class CctvRequestTests(unittest.TestCase):
         self.assertIn("요청 내용", response.json()["detail"])
 
     def test_cctv_request_requires_end_time(self):
-        client = self.login("viewer", "viewer1234")
+        client = self.login("cleaner", "cleaner1234")
         response = client.post(
             "/api/cctv/requests",
             data={
@@ -137,7 +156,7 @@ class CctvRequestTests(unittest.TestCase):
         self.assertIn("검색 끝 시간", response.json()["detail"])
 
     def test_cctv_request_rejects_end_time_before_start_time(self):
-        client = self.login("viewer", "viewer1234")
+        client = self.login("cleaner", "cleaner1234")
         response = client.post(
             "/api/cctv/requests",
             data={

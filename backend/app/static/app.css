@@ -868,12 +868,25 @@ summary:focus-visible {
   background: linear-gradient(135deg, #223550, #101b2a);
 }
 
+.badge-role-director,
+.badge-role-manager,
+.badge-role-section-chief,
+.badge-role-team-lead {
+  color: white;
+  background: linear-gradient(135deg, #37517e, #223550);
+}
+
+.badge-role-staff {
+  color: white;
+  background: var(--warn);
+}
+
 .badge-role-guard {
   color: white;
   background: linear-gradient(135deg, var(--brand), var(--brand-deep));
 }
 
-.badge-role-viewer {
+.badge-role-cleaner {
   color: white;
   background: var(--idle);
 }

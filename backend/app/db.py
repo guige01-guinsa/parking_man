@@ -6,6 +6,16 @@ BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("PARKING_DB_PATH", str(BASE_DIR / "data" / "parking.db")))
 DEFAULT_SITE_CODE = (os.getenv("PARKING_DEFAULT_SITE_CODE", "APT1100").strip().upper() or "APT1100")
 SEED_DEMO = os.getenv("PARKING_SEED_DEMO", "1").strip().lower() in {"1", "true", "yes", "on"}
+VALID_USER_ROLES = {
+    "admin",
+    "director",
+    "manager",
+    "section_chief",
+    "team_lead",
+    "staff",
+    "guard",
+    "cleaner",
+}
 
 
 class ClosingConnection(sqlite3.Connection):
@@ -146,12 +156,30 @@ def ensure_cctv_request_schema(con: sqlite3.Connection) -> None:
     create_cctv_request_indexes(con)
 
 
+def ensure_user_role_schema(con: sqlite3.Connection) -> None:
+    columns = table_columns(con, "users")
+    if not columns:
+        return
+
+    con.execute("UPDATE users SET role = 'cleaner' WHERE role = 'viewer'")
+    placeholders = ", ".join("?" for _ in VALID_USER_ROLES)
+    con.execute(
+        f"""
+        UPDATE users
+        SET role = 'cleaner'
+        WHERE role IS NULL OR role = '' OR role NOT IN ({placeholders})
+        """,
+        tuple(sorted(VALID_USER_ROLES)),
+    )
+
+
 def init_db() -> None:
     schema_path = BASE_DIR / "schema.sql"
     schema_sql = schema_path.read_text(encoding="utf-8")
     with connect() as con:
         con.executescript(schema_sql)
         ensure_cctv_request_schema(con)
+        ensure_user_role_schema(con)
         con.commit()
 
 
@@ -161,7 +189,7 @@ def seed_users() -> None:
     demo_users = [
         ("admin", pbkdf2_hash("admin1234"), "admin"),
         ("guard", pbkdf2_hash("guard1234"), "guard"),
-        ("viewer", pbkdf2_hash("viewer1234"), "viewer"),
+        ("cleaner", pbkdf2_hash("cleaner1234"), "cleaner"),
     ]
     with connect() as con:
         existing = con.execute("SELECT COUNT(*) AS cnt FROM users").fetchone()
