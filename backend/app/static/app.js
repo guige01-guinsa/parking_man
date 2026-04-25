@@ -54,6 +54,15 @@ const cctvSearchEndTimeInput = document.getElementById("cctv-search-end-time");
 const cctvContentInput = document.getElementById("cctv-content");
 const cctvRequestList = document.getElementById("cctv-request-list");
 const cctvRefreshBtn = document.getElementById("cctv-refresh-btn");
+const cctvLoadMoreBtn = document.getElementById("cctv-load-more-btn");
+const historyFilterForm = document.getElementById("history-filter-form");
+const historyQueryInput = document.getElementById("history-query");
+const historyVerdictInput = document.getElementById("history-verdict");
+const historyRangeInput = document.getElementById("history-range");
+const historyDateFromInput = document.getElementById("history-date-from");
+const historyDateToInput = document.getElementById("history-date-to");
+const historyResetBtn = document.getElementById("history-reset-btn");
+const historyLoadMoreBtn = document.getElementById("history-load-more-btn");
 const geoStatus = document.getElementById("geo-status");
 const statusBanner = document.getElementById("status-banner");
 const quickMemoButtons = Array.from(document.querySelectorAll(".quick-chip"));
@@ -92,6 +101,13 @@ let currentCheckIndex = 0;
 let currentCheckRequestedPlate = "";
 let cctvAssignees = [];
 let activeMobileTab = "enforce";
+let historyOffset = 0;
+let historyHasMore = false;
+const HISTORY_PAGE_SIZE = 20;
+let cctvOffset = 0;
+let cctvHasMore = false;
+const CCTV_PAGE_SIZE = 20;
+let cctvRequestRows = [];
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -480,14 +496,16 @@ function renderSearchResults(rows) {
   refreshSmsLinks(searchResults);
 }
 
-function renderRecent(rows) {
+function renderRecent(rows, append = false) {
   if (!rows?.length) {
-    recentResults.className = "list-board empty-state";
-    recentResults.textContent = "저장된 단속 기록이 없습니다.";
+    if (!append) {
+      recentResults.className = "list-board empty-state";
+      recentResults.textContent = "조회된 단속 기록이 없습니다.";
+    }
     return;
   }
   recentResults.className = "list-board";
-  recentResults.innerHTML = rows
+  const markup = rows
     .map((row) => `
       <article class="result-item">
         <div class="result-top">
@@ -495,10 +513,17 @@ function renderRecent(rows) {
           <span class="result-badge ${badgeClass(row.verdict)}">${escapeHtml(row.verdict)}</span>
         </div>
         <div>${escapeHtml(row.verdict_message || "-")}</div>
-        <div class="subtle">${escapeHtml(row.location || "-")} · ${escapeHtml(row.inspector || "-")} · ${escapeHtml(row.created_at || "-")}</div>
+        <div class="subtle">${escapeHtml(row.location || "-")} · ${escapeHtml(row.inspector || "-")} · ${escapeHtml(displayDateTime(row.created_at))}</div>
+        <div class="subtle">${escapeHtml(row.owner_name || "-")} / ${escapeHtml(row.unit || "-")}${row.memo ? ` · ${escapeHtml(row.memo)}` : ""}</div>
+        ${row.photo_path ? `<a class="contact-action" href="${escapeHtml(row.photo_path)}" target="_blank" rel="noopener">사진 보기</a>` : ""}
       </article>
     `)
     .join("");
+  if (append) {
+    recentResults.insertAdjacentHTML("beforeend", markup);
+  } else {
+    recentResults.innerHTML = markup;
+  }
   attachResultClickHandlers(recentResults);
 }
 
@@ -686,6 +711,41 @@ function displayDateTimeRange(startValue, endValue) {
     return start;
   }
   return `${start} ~ ${end}`;
+}
+
+function toDateTimeLocal(date) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function historyRangeValues() {
+  const range = historyRangeInput?.value || "";
+  const now = new Date();
+  if (range === "today") {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(now);
+    end.setHours(23, 59, 59, 999);
+    return { dateFrom: toDateTimeLocal(start), dateTo: toDateTimeLocal(end) };
+  }
+  if (range === "7d") {
+    const start = new Date(now);
+    start.setDate(start.getDate() - 7);
+    start.setHours(0, 0, 0, 0);
+    return { dateFrom: toDateTimeLocal(start), dateTo: toDateTimeLocal(now) };
+  }
+  if (range === "custom") {
+    return {
+      dateFrom: historyDateFromInput?.value.trim() || "",
+      dateTo: historyDateToInput?.value.trim() || "",
+    };
+  }
+  return { dateFrom: "", dateTo: "" };
+}
+
+function syncHistoryRangeState() {
+  const isCustom = historyRangeInput?.value === "custom";
+  document.querySelector(".history-custom-range")?.classList.toggle("is-visible", isCustom);
 }
 
 function renderCctvAdminControls(row) {
@@ -888,9 +948,29 @@ async function searchRegistry() {
   renderSearchResults(data);
 }
 
-async function loadRecent() {
-  const data = await fetchJson(apiUrl("/api/enforcement/recent"));
-  renderRecent(data);
+async function loadRecent({ append = false } = {}) {
+  if (!recentResults) return;
+  const offset = append ? historyOffset : 0;
+  const { dateFrom, dateTo } = historyRangeValues();
+  const params = new URLSearchParams({
+    limit: String(HISTORY_PAGE_SIZE),
+    offset: String(offset),
+  });
+  const q = historyQueryInput?.value.trim() || "";
+  const verdict = historyVerdictInput?.value || "";
+  if (q) params.set("q", q);
+  if (verdict) params.set("verdict", verdict);
+  if (dateFrom) params.set("date_from", dateFrom);
+  if (dateTo) params.set("date_to", dateTo);
+
+  const data = await fetchJson(`${apiUrl("/api/enforcement/history")}?${params.toString()}`);
+  const rows = Array.isArray(data.items) ? data.items : [];
+  renderRecent(rows, append);
+  historyOffset = append ? historyOffset + rows.length : rows.length;
+  historyHasMore = Boolean(data.has_more);
+  if (historyLoadMoreBtn) {
+    historyLoadMoreBtn.hidden = !historyHasMore;
+  }
 }
 
 async function loadRegistryStatus() {
@@ -943,10 +1023,22 @@ async function loadCctvAssignees() {
   cctvAssignees = await fetchJson(apiUrl("/api/cctv/assignees"));
 }
 
-async function loadCctvRequests() {
+async function loadCctvRequests({ append = false } = {}) {
   if (!cctvRequestList) return;
-  const data = await fetchJson(apiUrl("/api/cctv/requests"));
-  renderCctvRequests(data);
+  const offset = append ? cctvOffset : 0;
+  const params = new URLSearchParams({
+    limit: String(CCTV_PAGE_SIZE + 1),
+    offset: String(offset),
+  });
+  const data = await fetchJson(`${apiUrl("/api/cctv/requests")}?${params.toString()}`);
+  const items = Array.isArray(data) ? data.slice(0, CCTV_PAGE_SIZE) : [];
+  cctvRequestRows = append ? [...cctvRequestRows, ...items] : items;
+  renderCctvRequests(cctvRequestRows);
+  cctvOffset = offset + items.length;
+  cctvHasMore = Array.isArray(data) && data.length > CCTV_PAGE_SIZE;
+  if (cctvLoadMoreBtn) {
+    cctvLoadMoreBtn.hidden = !cctvHasMore;
+  }
 }
 
 async function createCctvRequest(event) {
@@ -1192,6 +1284,20 @@ userRefreshBtn?.addEventListener("click", () => loadUsers().catch((error) => ale
 siteRefreshBtn?.addEventListener("click", () => loadSites().catch((error) => alert(error.message)));
 cctvRequestForm?.addEventListener("submit", (event) => createCctvRequest(event).catch((error) => alert(error.message)));
 cctvRefreshBtn?.addEventListener("click", () => loadCctvRequests().catch((error) => alert(error.message)));
+cctvLoadMoreBtn?.addEventListener("click", () => loadCctvRequests({ append: true }).catch((error) => alert(error.message)));
+historyFilterForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  loadRecent().catch((error) => alert(error.message));
+});
+historyResetBtn?.addEventListener("click", () => {
+  if (historyFilterForm) {
+    historyFilterForm.reset();
+  }
+  syncHistoryRangeState();
+  loadRecent().catch((error) => alert(error.message));
+});
+historyRangeInput?.addEventListener("change", syncHistoryRangeState);
+historyLoadMoreBtn?.addEventListener("click", () => loadRecent({ append: true }).catch((error) => alert(error.message)));
 document.getElementById("geo-btn")?.addEventListener("click", loadGeolocation);
 document.getElementById("search-query")?.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
@@ -1214,6 +1320,7 @@ renderRegistrySelection();
 renderCandidates([]);
 renderIdleVerdict();
 setStatus("촬영 대기 중", "idle");
+syncHistoryRangeState();
 initMobileTabs();
 
 loadRecent().catch((error) => {

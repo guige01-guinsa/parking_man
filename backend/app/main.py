@@ -416,6 +416,18 @@ def validate_cctv_time_range(search_start_time: str, search_end_time: str) -> No
         raise HTTPException(status_code=400, detail="검색 끝 시간은 시작 시간 이후로 입력해 주세요.")
 
 
+def normalize_history_datetime(value: str | None, *, end_of_range: bool = False) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    text = text.replace("T", " ")
+    if len(text) == 10:
+        return f"{text} {'23:59:59' if end_of_range else '00:00:00'}"
+    if len(text) == 16:
+        return f"{text}:{'59' if end_of_range else '00'}"
+    return text
+
+
 def normalize_new_password(value: str | None, *, required: bool) -> str | None:
     if value is None:
         if required:
@@ -871,11 +883,12 @@ def api_cctv_assignees(request: Request):
 
 
 @app.get("/api/cctv/requests")
-def api_cctv_requests(request: Request, limit: int = 50):
+def api_cctv_requests(request: Request, limit: int = 50, offset: int = 0):
     ensure_ready()
     session = require_role(request, VIEW_ROLES)
     site_code = current_site_code(request)
     limit = min(max(limit, 1), 100)
+    offset = max(offset, 0)
 
     base_query = """
         SELECT *
@@ -900,9 +913,9 @@ def api_cctv_requests(request: Request, limit: int = 50):
           work_weight DESC,
           search_start_time ASC,
           created_at DESC
-        LIMIT ?
+        LIMIT ? OFFSET ?
     """
-    params.append(limit)
+    params.extend([limit, offset])
     with connect() as con:
         rows = con.execute(base_query, params).fetchall()
     return [cctv_request_dict(row) for row in rows]
@@ -1230,3 +1243,79 @@ def api_enforcement_recent(request: Request, limit: int = 20):
             (site_code, limit),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+@app.get("/api/enforcement/history")
+def api_enforcement_history(
+    request: Request,
+    q: str = "",
+    verdict: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    limit: int = 20,
+    offset: int = 0,
+):
+    ensure_ready()
+    require_role(request, VIEW_ROLES)
+    site_code = current_site_code(request)
+    limit = min(max(limit, 1), 50)
+    offset = max(offset, 0)
+
+    where = ["site_code = ?"]
+    params: list[Any] = [site_code]
+
+    query = str(q or "").strip()
+    if query:
+        normalized_plate = normalize_plate(query)
+        like = f"%{query}%"
+        plate_like = f"%{normalized_plate or query}%"
+        where.append(
+            """
+            (
+              plate LIKE ?
+              OR COALESCE(unit, '') LIKE ?
+              OR COALESCE(owner_name, '') LIKE ?
+              OR COALESCE(inspector, '') LIKE ?
+              OR COALESCE(location, '') LIKE ?
+              OR COALESCE(memo, '') LIKE ?
+            )
+            """
+        )
+        params.extend([plate_like, like, like, like, like, like])
+
+    normalized_verdict = str(verdict or "").strip().upper()
+    if normalized_verdict:
+        where.append("verdict = ?")
+        params.append(normalized_verdict)
+
+    normalized_from = normalize_history_datetime(date_from)
+    if normalized_from:
+        where.append("created_at >= ?")
+        params.append(normalized_from)
+
+    normalized_to = normalize_history_datetime(date_to, end_of_range=True)
+    if normalized_to:
+        where.append("created_at <= ?")
+        params.append(normalized_to)
+
+    sql = f"""
+        SELECT id, plate, verdict, verdict_message, unit, owner_name, inspector, location, memo, photo_path, created_at
+        FROM enforcement_events
+        WHERE {' AND '.join(where)}
+        ORDER BY id DESC
+        LIMIT ? OFFSET ?
+    """
+    params.extend([limit + 1, offset])
+
+    with connect() as con:
+        rows = [dict(row) for row in con.execute(sql, params).fetchall()]
+
+    has_more = len(rows) > limit
+    items = rows[:limit]
+    return {
+        "items": items,
+        "limit": limit,
+        "offset": offset,
+        "next_offset": offset + len(items) if has_more else None,
+        "has_more": has_more,
+    }

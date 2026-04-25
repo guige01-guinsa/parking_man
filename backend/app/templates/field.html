@@ -214,18 +214,67 @@
           </label>
           <button id="cctv-submit-btn" type="submit" class="primary-btn action-tall">검색요청 등록</button>
         </form>
-        <div id="cctv-request-list" class="list-board empty-state">CCTV 검색요청을 불러오는 중입니다.</div>
+        <div>
+          <div id="cctv-request-list" class="list-board empty-state">CCTV 검색요청을 불러오는 중입니다.</div>
+          <button id="cctv-load-more-btn" type="button" class="secondary-btn load-more-btn" hidden>더 보기</button>
+        </div>
       </div>
     </section>
 
     <section class="panel log-panel mobile-tab-panel" data-mobile-tab-panel="recent">
       <div class="panel-head">
         <div>
-          <p class="eyebrow">Recent</p>
-          <h3>최근 단속 기록</h3>
+          <p class="eyebrow">History</p>
+          <h3>기록조회</h3>
         </div>
       </div>
+      <details class="history-filter-box">
+        <summary>검색 및 기간 필터</summary>
+        <form id="history-filter-form" class="history-filter-form">
+          <label>
+            <span>검색어</span>
+            <input id="history-query" type="text" placeholder="차량번호, 동호수, 차주, 단속자, 위치, 메모">
+          </label>
+          <div class="field-grid">
+            <label>
+              <span>판정</span>
+              <select id="history-verdict">
+                <option value="">전체</option>
+                <option value="OK">정상</option>
+                <option value="TEMP">임시</option>
+                <option value="EXPIRED">만료</option>
+                <option value="BLOCKED">차단</option>
+                <option value="UNREGISTERED">미등록</option>
+              </select>
+            </label>
+            <label>
+              <span>기간</span>
+              <select id="history-range">
+                <option value="">전체</option>
+                <option value="today">오늘</option>
+                <option value="7d">최근 7일</option>
+                <option value="custom">직접 선택</option>
+              </select>
+            </label>
+          </div>
+          <div class="field-grid history-custom-range">
+            <label>
+              <span>시작</span>
+              <input id="history-date-from" type="datetime-local">
+            </label>
+            <label>
+              <span>끝</span>
+              <input id="history-date-to" type="datetime-local">
+            </label>
+          </div>
+          <div class="history-filter-actions">
+            <button id="history-search-btn" type="submit" class="primary-btn">조회</button>
+            <button id="history-reset-btn" type="button" class="ghost-btn">초기화</button>
+          </div>
+        </form>
+      </details>
       <div id="recent-results" class="list-board empty-state">저장된 기록을 불러오는 중입니다.</div>
+      <button id="history-load-more-btn" type="button" class="secondary-btn load-more-btn" hidden>더 보기</button>
     </section>
 
     {% if is_admin %}
@@ -351,7 +400,7 @@
     <button type="button" class="mobile-tab-btn" data-mobile-tab="enforce">단속</button>
     <button type="button" class="mobile-tab-btn" data-mobile-tab="search">검색</button>
     <button type="button" class="mobile-tab-btn" data-mobile-tab="cctv">CCTV</button>
-    <button type="button" class="mobile-tab-btn" data-mobile-tab="recent">최근</button>
+    <button type="button" class="mobile-tab-btn" data-mobile-tab="recent">기록조회</button>
     {% if is_admin %}
     <button type="button" class="mobile-tab-btn" data-mobile-tab="admin">관리</button>
     {% endif %}

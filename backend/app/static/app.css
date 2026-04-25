@@ -530,6 +530,49 @@ summary:focus-visible {
   gap: 12px;
 }
 
+.history-filter-box {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.64);
+  border: 1px solid rgba(31, 36, 40, 0.08);
+}
+
+.history-filter-box summary {
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.history-filter-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.history-filter-form label {
+  display: grid;
+  gap: 8px;
+}
+
+.history-custom-range {
+  display: none;
+}
+
+.history-custom-range.is-visible {
+  display: grid;
+}
+
+.history-filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.load-more-btn {
+  width: 100%;
+  margin-top: 12px;
+}
+
 .admin-upload-row {
   display: grid;
   grid-template-columns: 1.1fr 0.9fr;
@@ -1144,8 +1187,14 @@ summary:focus-visible {
   .status-board,
   .list-board,
   .geo-box,
-  .admin-upload-box {
+  .admin-upload-box,
+  .history-filter-box {
     border-radius: 18px;
+  }
+
+  .history-filter-actions {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 
   .status-banner {

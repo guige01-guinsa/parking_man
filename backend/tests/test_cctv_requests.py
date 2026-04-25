@@ -146,6 +146,20 @@ class CctvRequestTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in admin_listing.json()], [active_id])
         self.assertEqual([row["id"] for row in cleaner_listing.json()], [active_id])
 
+    def test_cctv_request_list_supports_offset_pagination(self):
+        cleaner = self.login("cleaner", "cleaner1234")
+        self.create_request(cleaner)
+        self.create_request(cleaner)
+        self.create_request(cleaner)
+
+        first_page = cleaner.get("/api/cctv/requests", params={"limit": 2, "offset": 0})
+        second_page = cleaner.get("/api/cctv/requests", params={"limit": 2, "offset": 2})
+
+        self.assertEqual(first_page.status_code, 200)
+        self.assertEqual(second_page.status_code, 200)
+        self.assertEqual(len(first_page.json()), 2)
+        self.assertEqual(len(second_page.json()), 1)
+
     def test_cctv_request_requires_required_fields(self):
         client = self.login("cleaner", "cleaner1234")
         response = client.post(
