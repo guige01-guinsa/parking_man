@@ -30,6 +30,9 @@ ROOT_PATH = os.getenv("PARKING_ROOT_PATH", "").strip()
 LOCAL_LOGIN_ENABLED = os.getenv("PARKING_LOCAL_LOGIN_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
 SUPPORT_KAKAO_URL = os.getenv("PARKING_SUPPORT_KAKAO_URL", "").strip()
 SUPPORT_KAKAO_LABEL = os.getenv("PARKING_SUPPORT_KAKAO_LABEL", "카카오톡 문의").strip() or "카카오톡 문의"
+BILLING_PROVIDER = os.getenv("PARKING_BILLING_PROVIDER", "manual").strip().lower() or "manual"
+BILLING_ENFORCEMENT_ENABLED = os.getenv("PARKING_BILLING_ENFORCEMENT_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+SALES_CONTACT_URL = os.getenv("PARKING_SALES_CONTACT_URL", "").strip()
 
 if ROOT_PATH and not ROOT_PATH.startswith("/"):
     ROOT_PATH = f"/{ROOT_PATH}"
@@ -89,6 +92,14 @@ class SiteCreateRequest(BaseModel):
     admin_password: str
 
 
+class BillingInquiryRequest(BaseModel):
+    requested_plan: str
+    contact_name: str | None = None
+    contact_phone: str | None = None
+    contact_email: str | None = None
+    message: str | None = None
+
+
 class CctvAssignmentRequest(BaseModel):
     assigned_to: str | None = None
     work_weight: int | None = Field(None, ge=1, le=5)
@@ -121,6 +132,54 @@ CCTV_STATUS_LABELS = {
     "cancelled": "취소",
 }
 CCTV_STATUSES = set(CCTV_STATUS_LABELS)
+BILLING_PLAN_CATALOG = {
+    "trial": {
+        "code": "trial",
+        "name": "무료 체험",
+        "monthly_price_krw": 0,
+        "users_limit": 3,
+        "vehicles_limit": 300,
+        "monthly_records_limit": 1000,
+        "monthly_cctv_limit": 20,
+        "support": "체험 지원",
+    },
+    "starter": {
+        "code": "starter",
+        "name": "Starter",
+        "monthly_price_krw": 49000,
+        "users_limit": 5,
+        "vehicles_limit": 1000,
+        "monthly_records_limit": 3000,
+        "monthly_cctv_limit": 100,
+        "support": "이메일 지원",
+    },
+    "standard": {
+        "code": "standard",
+        "name": "Standard",
+        "monthly_price_krw": 99000,
+        "users_limit": 15,
+        "vehicles_limit": 5000,
+        "monthly_records_limit": 15000,
+        "monthly_cctv_limit": 500,
+        "support": "우선 지원",
+    },
+    "pro": {
+        "code": "pro",
+        "name": "Pro",
+        "monthly_price_krw": 199000,
+        "users_limit": 50,
+        "vehicles_limit": 20000,
+        "monthly_records_limit": 50000,
+        "monthly_cctv_limit": 2000,
+        "support": "전담 지원",
+    },
+}
+BILLING_STATUS_LABELS = {
+    "trialing": "체험 중",
+    "active": "사용 중",
+    "past_due": "결제 필요",
+    "cancelled": "해지",
+}
 
 
 def app_url(path: str) -> str:
@@ -219,6 +278,131 @@ def site_name_for_code(site_code: str) -> str:
     with connect() as con:
         row = con.execute("SELECT name FROM sites WHERE site_code = ?", (normalize_site_code(site_code),)).fetchone()
     return row["name"] if row else normalize_site_code(site_code)
+
+
+def normalize_billing_plan(value: str | None) -> str:
+    plan = str(value or "").strip().lower()
+    if plan not in BILLING_PLAN_CATALOG or plan == "trial":
+        raise HTTPException(status_code=400, detail="요금제를 다시 확인해 주세요.")
+    return plan
+
+
+def normalize_billing_text(value: str | None, field_name: str, max_length: int) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if len(text) > max_length:
+        raise HTTPException(status_code=400, detail=f"{field_name}은 {max_length}자 이내로 입력해 주세요.")
+    return text
+
+
+def billing_plan_public_dict(plan_code: str) -> dict[str, Any]:
+    plan = dict(BILLING_PLAN_CATALOG[plan_code])
+    plan["display_price"] = "무료" if int(plan["monthly_price_krw"]) <= 0 else f"월 {int(plan['monthly_price_krw']):,}원"
+    return plan
+
+
+def ensure_site_billing_row(con, site_code: str) -> dict[str, Any]:
+    normalized_site = normalize_site_code(site_code)
+    con.execute(
+        """
+        INSERT OR IGNORE INTO site_billing(site_code, plan, status, trial_ends_at, payment_provider)
+        VALUES (?, 'trial', 'trialing', date('now', '+14 days'), ?)
+        """,
+        (normalized_site, BILLING_PROVIDER),
+    )
+    row = con.execute("SELECT * FROM site_billing WHERE site_code = ?", (normalized_site,)).fetchone()
+    return dict(row)
+
+
+def billing_status_for_site(site_code: str) -> dict[str, Any]:
+    normalized_site = normalize_site_code(site_code)
+    with connect() as con:
+        billing = ensure_site_billing_row(con, normalized_site)
+        usage = {
+            "users": con.execute("SELECT COUNT(*) AS cnt FROM users WHERE site_code = ?", (normalized_site,)).fetchone()["cnt"],
+            "vehicles": con.execute("SELECT COUNT(*) AS cnt FROM vehicles WHERE site_code = ?", (normalized_site,)).fetchone()["cnt"],
+            "monthly_records": con.execute(
+                """
+                SELECT COUNT(*) AS cnt
+                FROM enforcement_events
+                WHERE site_code = ? AND created_at >= datetime('now', 'start of month')
+                """,
+                (normalized_site,),
+            ).fetchone()["cnt"],
+            "monthly_cctv": con.execute(
+                """
+                SELECT COUNT(*) AS cnt
+                FROM cctv_search_requests
+                WHERE site_code = ? AND created_at >= datetime('now', 'start of month')
+                """,
+                (normalized_site,),
+            ).fetchone()["cnt"],
+        }
+        latest_inquiries = [
+            dict(row)
+            for row in con.execute(
+                """
+                SELECT id, requested_plan, contact_name, contact_phone, contact_email, message, status, created_at
+                FROM billing_inquiries
+                WHERE site_code = ?
+                ORDER BY id DESC
+                LIMIT 5
+                """,
+                (normalized_site,),
+            ).fetchall()
+        ]
+        trial_days_remaining = con.execute(
+            """
+            SELECT
+              CASE
+                WHEN trial_ends_at IS NULL THEN NULL
+                WHEN julianday(trial_ends_at) <= julianday('now') THEN 0
+                ELSE CAST(julianday(trial_ends_at) - julianday('now') AS INTEGER) + 1
+              END AS days
+            FROM site_billing
+            WHERE site_code = ?
+            """,
+            (normalized_site,),
+        ).fetchone()["days"]
+        con.commit()
+
+    plan_code = billing.get("plan") if billing.get("plan") in BILLING_PLAN_CATALOG else "trial"
+    plan = billing_plan_public_dict(plan_code)
+    return {
+        "site_code": normalized_site,
+        "site_name": site_name_for_code(normalized_site),
+        "billing": {
+            "plan": plan_code,
+            "plan_label": plan["name"],
+            "status": billing.get("status") or "trialing",
+            "status_label": BILLING_STATUS_LABELS.get(billing.get("status"), billing.get("status") or "체험 중"),
+            "trial_ends_at": billing.get("trial_ends_at"),
+            "trial_days_remaining": trial_days_remaining,
+            "current_period_ends_at": billing.get("current_period_ends_at"),
+            "payment_provider": billing.get("payment_provider") or BILLING_PROVIDER,
+            "enforcement_enabled": BILLING_ENFORCEMENT_ENABLED,
+        },
+        "current_plan": plan,
+        "plans": [billing_plan_public_dict(code) for code in ("starter", "standard", "pro")],
+        "usage": usage,
+        "latest_inquiries": latest_inquiries,
+        "sales_contact_url": SALES_CONTACT_URL if BILLING_PROVIDER != "google_play" else "",
+        "play_billing_required": BILLING_PROVIDER == "google_play",
+    }
+
+
+def require_billing_capacity(site_code: str, metric: str, next_count: int) -> None:
+    if not BILLING_ENFORCEMENT_ENABLED:
+        return
+    status = billing_status_for_site(site_code)
+    billing = status["billing"]
+    plan = status["current_plan"]
+    if billing["status"] not in {"trialing", "active"}:
+        raise HTTPException(status_code=402, detail="요금제 결제가 필요합니다.")
+    limit = int(plan.get(f"{metric}_limit") or 0)
+    if limit > 0 and next_count > limit:
+        raise HTTPException(status_code=402, detail="현재 요금제 한도를 초과했습니다. 업그레이드가 필요합니다.")
 
 
 def current_site_code(request: Request) -> str:
@@ -699,6 +883,40 @@ def api_me(request: Request):
     }
 
 
+@app.get("/api/billing/status")
+def api_billing_status(request: Request):
+    ensure_ready()
+    require_role(request, {"admin"})
+    return billing_status_for_site(current_site_code(request))
+
+
+@app.post("/api/billing/inquiries")
+def api_billing_inquiry_create(request: Request, payload: BillingInquiryRequest):
+    ensure_ready()
+    require_role(request, {"admin"})
+    site_code = current_site_code(request)
+    requested_plan = normalize_billing_plan(payload.requested_plan)
+    contact_name = normalize_billing_text(payload.contact_name, "담당자명", 40)
+    contact_phone = normalize_billing_text(payload.contact_phone, "연락처", 40)
+    contact_email = normalize_billing_text(payload.contact_email, "이메일", 120)
+    message = normalize_billing_text(payload.message, "문의 내용", 500)
+
+    if not any([contact_name, contact_phone, contact_email, message]):
+        raise HTTPException(status_code=400, detail="연락처 또는 문의 내용을 하나 이상 입력해 주세요.")
+
+    with connect() as con:
+        ensure_site_billing_row(con, site_code)
+        con.execute(
+            """
+            INSERT INTO billing_inquiries(site_code, requested_plan, contact_name, contact_phone, contact_email, message)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (site_code, requested_plan, contact_name, contact_phone, contact_email, message),
+        )
+        con.commit()
+    return billing_status_for_site(site_code)
+
+
 @app.get("/api/users")
 def api_users_list(request: Request, q: str = "", role: str = "", limit: int = 50, offset: int = 0):
     ensure_ready()
@@ -744,6 +962,10 @@ def api_users_create(request: Request, payload: UserCreateRequest):
     username = normalize_username(payload.username)
     role = normalize_user_role(payload.role)
     password = normalize_new_password(payload.password, required=True)
+
+    if BILLING_ENFORCEMENT_ENABLED:
+        current_usage = billing_status_for_site(site_code)["usage"]["users"]
+        require_billing_capacity(site_code, "users", int(current_usage) + 1)
 
     with connect() as con:
         exists = con.execute(
@@ -875,6 +1097,13 @@ def api_sites_create(request: Request, payload: SiteCreateRequest):
             "INSERT INTO users(site_code, username, pw_hash, role) VALUES (?, ?, ?, 'admin')",
             (site_code, admin_username, pbkdf2_hash(admin_password)),
         )
+        con.execute(
+            """
+            INSERT OR IGNORE INTO site_billing(site_code, plan, status, trial_ends_at, payment_provider)
+            VALUES (?, 'trial', 'trialing', date('now', '+14 days'), ?)
+            """,
+            (site_code, BILLING_PROVIDER),
+        )
         row = con.execute(
             """
             SELECT
@@ -970,6 +1199,9 @@ async def api_cctv_request_create(
     normalized_search_end_time = require_form_text(search_end_time or search_time, "검색 끝 시간")
     validate_cctv_time_range(normalized_search_start_time, normalized_search_end_time)
     normalized_content = require_form_text(content, "요청 내용")
+    if BILLING_ENFORCEMENT_ENABLED:
+        current_usage = billing_status_for_site(site_code)["usage"]["monthly_cctv"]
+        require_billing_capacity(site_code, "monthly_cctv", int(current_usage) + 1)
     payload = await photo.read()
     photo_path = save_photo_bytes(photo.filename, payload, site_code)
 
@@ -1212,6 +1444,9 @@ async def api_enforcement_submit(
     ensure_ready()
     require_role(request, ENFORCEMENT_WRITE_ROLES)
     site_code = current_site_code(request)
+    if BILLING_ENFORCEMENT_ENABLED:
+        current_usage = billing_status_for_site(site_code)["usage"]["monthly_records"]
+        require_billing_capacity(site_code, "monthly_records", int(current_usage) + 1)
     check = build_check_response(site_code, plate)
     photo_path = save_photo(photo, site_code) if photo else None
     learned_candidates = parse_candidates_json(ocr_candidates)

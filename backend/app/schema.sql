@@ -94,6 +94,29 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS site_billing (
+  site_code TEXT PRIMARY KEY,
+  plan TEXT NOT NULL DEFAULT 'trial',
+  status TEXT NOT NULL DEFAULT 'trialing',
+  trial_ends_at TEXT,
+  current_period_ends_at TEXT,
+  payment_provider TEXT NOT NULL DEFAULT 'manual',
+  external_customer_id TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS billing_inquiries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  site_code TEXT NOT NULL,
+  requested_plan TEXT NOT NULL,
+  contact_name TEXT,
+  contact_phone TEXT,
+  contact_email TEXT,
+  message TEXT,
+  status TEXT NOT NULL DEFAULT 'new',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_vehicles_site_plate ON vehicles(site_code, plate);
 CREATE INDEX IF NOT EXISTS idx_enforcement_site_created_at ON enforcement_events(site_code, created_at);
 CREATE INDEX IF NOT EXISTS idx_cctv_requests_site_requester ON cctv_search_requests(site_code, requester_username);
@@ -104,3 +127,4 @@ CREATE INDEX IF NOT EXISTS idx_ocr_feedback_site_raw_key ON ocr_feedback(site_co
 CREATE INDEX IF NOT EXISTS idx_ocr_feedback_site_suggested ON ocr_feedback(site_code, suggested_plate);
 CREATE INDEX IF NOT EXISTS idx_ocr_feedback_site_corrected ON ocr_feedback(site_code, corrected_plate);
 CREATE INDEX IF NOT EXISTS idx_sites_created_at ON sites(created_at);
+CREATE INDEX IF NOT EXISTS idx_billing_inquiries_site_created_at ON billing_inquiries(site_code, created_at);

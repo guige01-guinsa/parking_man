@@ -44,6 +44,14 @@
 - 기본 아파트(`APT1100`)의 Excel 원본은 기존처럼 `backend/imports/` 또는 Render의 `/data/imports`를 사용합니다.
 - 새 아파트의 Excel 원본은 `backend/imports/<소문자 아파트코드>/` 또는 Render의 `/data/imports/<소문자 아파트코드>/` 아래에 분리 저장됩니다.
 
+## 수익화 운영
+
+- 관리자 화면의 `요금제 및 업그레이드`에서 현재 요금제, 체험 상태, 사용자/차량/월간 사용량, 업그레이드 문의를 확인할 수 있습니다.
+- 기본 요금제는 `무료 체험`, 유료 요금제는 `Starter / Standard / Pro`로 구성되어 있습니다.
+- `PARKING_SALES_CONTACT_URL`을 설정하면 관리자 화면에서 상담 링크를 노출할 수 있습니다.
+- `PARKING_BILLING_ENFORCEMENT_ENABLED=1`을 설정하면 사용자 수, 월 단속 기록, 월 CCTV 요청 한도를 서버에서 차단합니다. 운영 전환 전까지는 기본값 `0`으로 두면 기존 현장 업무를 막지 않습니다.
+- `PARKING_BILLING_PROVIDER=google_play`는 Google Play 결제 연동 운영 모드입니다. Google Play에 배포한 앱에서 디지털 구독이나 앱 기능 이용권을 판매하려면 Android 앱 쪽에 Google Play Billing 연동이 필요합니다.
+
 ## Excel 컬럼 예시
 
 다음 헤더를 자동 인식합니다. 한국어/영문 혼용도 일부 허용합니다.

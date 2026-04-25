@@ -451,7 +451,7 @@ summary:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 52px;
+  min-height: 46px;
   padding: 0 14px;
   color: white;
   background: linear-gradient(135deg, #223550, #101b2a);
@@ -466,7 +466,7 @@ summary:focus-visible {
 }
 
 .action-tall {
-  min-height: 52px;
+  min-height: 46px;
 }
 
 .field-grid {
@@ -883,6 +883,76 @@ summary:focus-visible {
   gap: 14px;
 }
 
+.billing-section {
+  grid-column: 1 / -1;
+}
+
+.billing-board {
+  display: grid;
+  gap: 12px;
+}
+
+.billing-price {
+  font-size: 20px;
+  font-weight: 900;
+}
+
+.billing-usage-grid,
+.billing-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.billing-usage-row,
+.billing-plan-card,
+.billing-inquiry-list {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.76);
+  border: 1px solid rgba(31, 36, 40, 0.08);
+}
+
+.billing-usage-row div:first-child,
+.billing-inquiry-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.billing-usage-row span,
+.billing-inquiry-row span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.billing-meter {
+  overflow: hidden;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(31, 36, 40, 0.08);
+}
+
+.billing-meter span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(135deg, var(--brand), var(--warn));
+}
+
+.billing-plan-card.is-current {
+  border-color: rgba(15, 118, 110, 0.3);
+  background: rgba(240, 250, 247, 0.92);
+}
+
+.billing-inquiry-list {
+  grid-column: 1 / -1;
+}
+
 .user-item {
   gap: 12px;
 }
@@ -1159,7 +1229,9 @@ summary:focus-visible {
   .save-strip,
   .cctv-assignment-grid,
   .admin-upload-row,
-  .user-form-grid {
+  .user-form-grid,
+  .billing-usage-grid,
+  .billing-plan-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1169,6 +1241,11 @@ summary:focus-visible {
   }
 
   .user-action-row {
+    flex-direction: column;
+  }
+
+  .billing-inquiry-row {
+    align-items: flex-start;
     flex-direction: column;
   }
 

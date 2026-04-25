@@ -7,6 +7,7 @@ DB_PATH = Path(os.getenv("PARKING_DB_PATH", str(BASE_DIR / "data" / "parking.db"
 DEFAULT_SITE_CODE = (os.getenv("PARKING_DEFAULT_SITE_CODE", "APT1100").strip().upper() or "APT1100")
 DEFAULT_SITE_NAME = os.getenv("PARKING_DEFAULT_SITE_NAME", "기본 아파트").strip() or "기본 아파트"
 SEED_DEMO = os.getenv("PARKING_SEED_DEMO", "1").strip().lower() in {"1", "true", "yes", "on"}
+BILLING_PROVIDER = os.getenv("PARKING_BILLING_PROVIDER", "manual").strip().lower() or "manual"
 VALID_USER_ROLES = {
     "admin",
     "director",
@@ -99,6 +100,52 @@ def ensure_site_schema(con: sqlite3.Connection) -> None:
     con.execute(
         "INSERT OR IGNORE INTO sites(site_code, name) VALUES (?, ?)",
         (normalize_site_code(DEFAULT_SITE_CODE), DEFAULT_SITE_NAME),
+    )
+
+
+def ensure_billing_schema(con: sqlite3.Connection) -> None:
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS site_billing (
+          site_code TEXT PRIMARY KEY,
+          plan TEXT NOT NULL DEFAULT 'trial',
+          status TEXT NOT NULL DEFAULT 'trialing',
+          trial_ends_at TEXT,
+          current_period_ends_at TEXT,
+          payment_provider TEXT NOT NULL DEFAULT 'manual',
+          external_customer_id TEXT,
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS billing_inquiries (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_code TEXT NOT NULL,
+          requested_plan TEXT NOT NULL,
+          contact_name TEXT,
+          contact_phone TEXT,
+          contact_email TEXT,
+          message TEXT,
+          status TEXT NOT NULL DEFAULT 'new',
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_billing_inquiries_site_created_at
+        ON billing_inquiries(site_code, created_at)
+        """
+    )
+    con.execute(
+        """
+        INSERT OR IGNORE INTO site_billing(site_code, plan, status, trial_ends_at, payment_provider)
+        SELECT site_code, 'trial', 'trialing', date('now', '+14 days'), ?
+        FROM sites
+        """,
+        (BILLING_PROVIDER,),
     )
 
 
@@ -262,8 +309,10 @@ def init_db() -> None:
     with connect() as con:
         con.executescript(schema_sql)
         ensure_site_schema(con)
+        ensure_billing_schema(con)
         ensure_cctv_request_schema(con)
         ensure_user_role_schema(con)
+        ensure_billing_schema(con)
         con.commit()
 
 

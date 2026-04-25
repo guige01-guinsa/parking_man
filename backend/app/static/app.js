@@ -55,6 +55,14 @@ const siteFilterForm = document.getElementById("site-filter-form");
 const siteQueryInput = document.getElementById("site-query");
 const siteFilterResetBtn = document.getElementById("site-filter-reset-btn");
 const siteLoadMoreBtn = document.getElementById("site-load-more-btn");
+const billingStatus = document.getElementById("billing-status");
+const billingRefreshBtn = document.getElementById("billing-refresh-btn");
+const billingInquiryForm = document.getElementById("billing-inquiry-form");
+const billingRequestedPlanInput = document.getElementById("billing-requested-plan");
+const billingContactNameInput = document.getElementById("billing-contact-name");
+const billingContactPhoneInput = document.getElementById("billing-contact-phone");
+const billingContactEmailInput = document.getElementById("billing-contact-email");
+const billingMessageInput = document.getElementById("billing-message");
 const cctvRequestForm = document.getElementById("cctv-request-form");
 const cctvPhotoInput = document.getElementById("cctv-photo");
 const cctvLocationInput = document.getElementById("cctv-location");
@@ -261,6 +269,7 @@ function refreshActiveMobileTab(tab) {
     loadRecent().catch(() => {});
   } else if (tab === "admin") {
     loadRegistryStatus().catch(() => {});
+    loadBillingStatus().catch(() => {});
     loadUsers().catch(() => {});
     loadSites().catch(() => {});
   }
@@ -730,6 +739,106 @@ function displayDateTimeRange(startValue, endValue) {
   return `${start} ~ ${end}`;
 }
 
+function formatCount(value) {
+  return Number(value || 0).toLocaleString("ko-KR");
+}
+
+function formatLimit(value) {
+  const limit = Number(value || 0);
+  return limit > 0 ? formatCount(limit) : "무제한";
+}
+
+function billingMetricLabel(metric) {
+  return {
+    users: "사용자",
+    vehicles: "등록차량",
+    monthly_records: "월 단속기록",
+    monthly_cctv: "월 CCTV 요청",
+  }[metric] || metric;
+}
+
+function renderBillingStatus(status) {
+  if (!billingStatus) return;
+  const billing = status?.billing || {};
+  const currentPlan = status?.current_plan || {};
+  const usage = status?.usage || {};
+  const planCode = currentPlan.code || billing.plan || "trial";
+  const metrics = ["users", "vehicles", "monthly_records", "monthly_cctv"];
+  const usageMarkup = metrics
+    .map((metric) => {
+      const limit = currentPlan[`${metric}_limit`];
+      const used = Number(usage[metric] || 0);
+      const limitNumber = Number(limit || 0);
+      const percent = limitNumber > 0 ? Math.min(100, Math.round((used / limitNumber) * 100)) : 0;
+      return `
+        <div class="billing-usage-row">
+          <div>
+            <strong>${escapeHtml(billingMetricLabel(metric))}</strong>
+            <span>${escapeHtml(formatCount(used))} / ${escapeHtml(formatLimit(limit))}</span>
+          </div>
+          <div class="billing-meter" aria-hidden="true"><span style="width: ${percent}%"></span></div>
+        </div>
+      `;
+    })
+    .join("");
+  const plans = Array.isArray(status?.plans) ? status.plans : [];
+  const planMarkup = plans
+    .map((plan) => `
+      <article class="billing-plan-card ${plan.code === planCode ? "is-current" : ""}">
+        <div class="result-top">
+          <strong>${escapeHtml(plan.name)}</strong>
+          <span class="result-badge ${plan.code === planCode ? "badge-ok" : "badge-idle"}">${plan.code === planCode ? "현재" : "선택 가능"}</span>
+        </div>
+        <div class="billing-price">${escapeHtml(plan.display_price || "-")}</div>
+        <div class="subtle">사용자 ${escapeHtml(formatLimit(plan.users_limit))}명 · 차량 ${escapeHtml(formatLimit(plan.vehicles_limit))}대</div>
+        <div class="subtle">단속 ${escapeHtml(formatLimit(plan.monthly_records_limit))}건/월 · CCTV ${escapeHtml(formatLimit(plan.monthly_cctv_limit))}건/월</div>
+        <div class="subtle">${escapeHtml(plan.support || "-")}</div>
+      </article>
+    `)
+    .join("");
+  const inquiries = Array.isArray(status?.latest_inquiries) ? status.latest_inquiries : [];
+  const inquiryMarkup = inquiries.length
+    ? inquiries
+        .map((item) => `
+          <div class="billing-inquiry-row">
+            <strong>${escapeHtml(item.requested_plan || "-")}</strong>
+            <span>${escapeHtml(item.contact_name || item.contact_phone || item.contact_email || "-")}</span>
+            <span>${escapeHtml(displayDateTime(item.created_at))}</span>
+          </div>
+        `)
+        .join("")
+    : '<div class="subtle">등록된 업그레이드 문의가 없습니다.</div>';
+  const trialText = billing.trial_days_remaining !== null && billing.trial_days_remaining !== undefined
+    ? ` · 체험 ${escapeHtml(billing.trial_days_remaining)}일 남음`
+    : "";
+  const paymentNotice = status?.play_billing_required
+    ? "Google Play 출시 앱에서 디지털 구독을 판매할 때는 Play 결제 연동 모드로 운영합니다."
+    : status?.sales_contact_url
+      ? `<a class="contact-action" href="${escapeHtml(status.sales_contact_url)}" target="_blank" rel="noopener">상담 링크 열기</a>`
+      : "문의 등록 후 운영자가 결제 안내를 진행합니다.";
+
+  billingStatus.className = "status-board billing-board";
+  billingStatus.innerHTML = `
+    <div class="result-item">
+      <div class="result-top">
+        <div>
+          <div class="result-title">${escapeHtml(status?.site_name || currentSiteName || "-")}</div>
+          <div class="subtle">${escapeHtml(status?.site_code || currentSiteCode || "-")} · ${escapeHtml(billing.status_label || "-")}${trialText}</div>
+        </div>
+        <span class="result-badge badge-ok">${escapeHtml(billing.plan_label || currentPlan.name || "-")}</span>
+      </div>
+      <div class="billing-price">${escapeHtml(currentPlan.display_price || "-")}</div>
+      <div class="subtle">${paymentNotice}</div>
+    </div>
+    <div class="billing-usage-grid">${usageMarkup}</div>
+    <div class="billing-plan-grid">${planMarkup}</div>
+    <div class="billing-inquiry-list">
+      <strong>최근 문의</strong>
+      ${inquiryMarkup}
+    </div>
+  `;
+}
+
 function toDateTimeLocal(date) {
   const pad = (value) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
@@ -1159,6 +1268,45 @@ async function loadSites({ append = false } = {}) {
   }
 }
 
+async function loadBillingStatus() {
+  if (!billingStatus) return;
+  const data = await fetchJson(apiUrl("/api/billing/status"));
+  renderBillingStatus(data);
+}
+
+async function submitBillingInquiry(event) {
+  event.preventDefault();
+  if (!billingInquiryForm || !billingRequestedPlanInput) return;
+
+  const requestedPlan = billingRequestedPlanInput.value;
+  const contactName = billingContactNameInput?.value.trim() || "";
+  const contactPhone = billingContactPhoneInput?.value.trim() || "";
+  const contactEmail = billingContactEmailInput?.value.trim() || "";
+  const message = billingMessageInput?.value.trim() || "";
+
+  if (!contactName && !contactPhone && !contactEmail && !message) {
+    alert("연락처 또는 문의 내용을 하나 이상 입력해 주세요.");
+    return;
+  }
+
+  setStatus("업그레이드 문의 등록 중", "active");
+  const data = await fetchJson(apiUrl("/api/billing/inquiries"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      requested_plan: requestedPlan,
+      contact_name: contactName || null,
+      contact_phone: contactPhone || null,
+      contact_email: contactEmail || null,
+      message: message || null,
+    }),
+  });
+  billingInquiryForm.reset();
+  billingRequestedPlanInput.value = requestedPlan;
+  renderBillingStatus(data);
+  setStatus("업그레이드 문의 등록 완료", "success");
+}
+
 async function createSite() {
   if (!newSiteCodeInput || !newSiteNameInput || !newSiteAdminUsernameInput || !newSiteAdminPasswordInput) return;
 
@@ -1216,6 +1364,7 @@ async function createUser() {
   newUserPasswordInput.value = "";
   newUserRoleInput.value = "guard";
   await loadUsers();
+  await loadBillingStatus();
   setStatus(`사용자 ${username} 등록 완료`, "success");
 }
 
@@ -1331,6 +1480,8 @@ document.getElementById("sync-btn")?.addEventListener("click", () => syncRegistr
 uploadRegistryBtn?.addEventListener("click", () => uploadRegistryFiles().catch((error) => alert(error.message)));
 userRefreshBtn?.addEventListener("click", () => loadUsers().catch((error) => alert(error.message)));
 siteRefreshBtn?.addEventListener("click", () => loadSites().catch((error) => alert(error.message)));
+billingRefreshBtn?.addEventListener("click", () => loadBillingStatus().catch((error) => alert(error.message)));
+billingInquiryForm?.addEventListener("submit", (event) => submitBillingInquiry(event).catch((error) => alert(error.message)));
 userFilterForm?.addEventListener("submit", (event) => {
   event.preventDefault();
   loadUsers().catch((error) => alert(error.message));
@@ -1395,6 +1546,7 @@ loadRecent().catch((error) => {
   recentResults.textContent = error.message;
 });
 loadRegistryStatus().catch(() => {});
+loadBillingStatus().catch(() => {});
 loadUsers().catch(() => {});
 loadSites().catch(() => {});
 loadCctvAssignees()

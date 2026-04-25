@@ -311,6 +311,53 @@
           <div id="registry-status" class="status-board">동기화 상태를 불러오는 중입니다.</div>
         </article>
 
+        <article class="admin-section billing-section">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Revenue</p>
+              <h3>요금제 및 업그레이드</h3>
+            </div>
+            <button id="billing-refresh-btn" type="button" class="ghost-btn">상태 새로고침</button>
+          </div>
+          <div id="billing-status" class="status-board">요금제 상태를 불러오는 중입니다.</div>
+          <details class="history-filter-box">
+            <summary>업그레이드 문의</summary>
+            <form id="billing-inquiry-form" class="history-filter-form">
+              <div class="field-grid user-form-grid">
+                <label>
+                  <span>희망 요금제</span>
+                  <select id="billing-requested-plan" required>
+                    <option value="starter">Starter</option>
+                    <option value="standard" selected>Standard</option>
+                    <option value="pro">Pro</option>
+                  </select>
+                </label>
+                <label>
+                  <span>담당자명</span>
+                  <input id="billing-contact-name" type="text" placeholder="예: 관리소장" autocomplete="off">
+                </label>
+              </div>
+              <div class="field-grid user-form-grid">
+                <label>
+                  <span>연락처</span>
+                  <input id="billing-contact-phone" type="text" placeholder="예: 010-0000-0000" autocomplete="off">
+                </label>
+                <label>
+                  <span>이메일</span>
+                  <input id="billing-contact-email" type="text" placeholder="예: office@example.com" autocomplete="off">
+                </label>
+              </div>
+              <label>
+                <span>문의 내용</span>
+                <textarea id="billing-message" rows="3" placeholder="예: 2개 단지 통합 사용과 결제 안내 요청"></textarea>
+              </label>
+              <div class="history-filter-actions">
+                <button id="billing-inquiry-submit-btn" type="submit" class="primary-btn">문의 등록</button>
+              </div>
+            </form>
+          </details>
+        </article>
+
         <article class="admin-section">
           <div class="panel-head">
             <div>
