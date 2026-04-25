@@ -85,6 +85,7 @@ const statusBanner = document.getElementById("status-banner");
 const quickMemoButtons = Array.from(document.querySelectorAll(".quick-chip"));
 const mobileTabButtons = Array.from(document.querySelectorAll("[data-mobile-tab]"));
 const mobileTabPanels = Array.from(document.querySelectorAll("[data-mobile-tab-panel]"));
+const firstUseGuide = document.getElementById("first-use-guide");
 
 const USER_ROLE_OPTIONS = [
   { value: "admin", label: "관리자", badgeClass: "badge-role-admin" },
@@ -260,6 +261,23 @@ function setStatus(message, tone = "idle") {
 
 function mobileTabStorageKey() {
   return `parking:${currentSiteCode || "default"}:${currentRole || "role"}:mobile-tab`;
+}
+
+function firstUseGuideStorageKey() {
+  return `parking:${currentSiteCode || "default"}:${currentRole || "role"}:first-use-guide-open`;
+}
+
+function initFirstUseGuide() {
+  if (!firstUseGuide) {
+    return;
+  }
+  const saved = localStorage.getItem(firstUseGuideStorageKey());
+  if (saved === "0") {
+    firstUseGuide.open = false;
+  }
+  firstUseGuide.addEventListener("toggle", () => {
+    localStorage.setItem(firstUseGuideStorageKey(), firstUseGuide.open ? "1" : "0");
+  });
 }
 
 function refreshActiveMobileTab(tab) {
@@ -1611,6 +1629,7 @@ renderCandidates([]);
 renderIdleVerdict();
 setStatus("촬영 대기 중", "idle");
 syncHistoryRangeState();
+initFirstUseGuide();
 initMobileTabs();
 
 loadRecent().catch((error) => {

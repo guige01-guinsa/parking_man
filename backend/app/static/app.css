@@ -330,6 +330,84 @@ summary:focus-visible {
   margin-bottom: 18px;
 }
 
+.guide-panel {
+  margin-bottom: 18px;
+  padding: 18px;
+  border: 1px solid rgba(26, 35, 40, 0.1);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 16px 46px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(18px);
+}
+
+.guide-panel summary {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  list-style: none;
+}
+
+.guide-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.guide-panel summary span {
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.guide-panel summary small {
+  color: var(--muted);
+  font-weight: 700;
+  text-align: right;
+}
+
+.guide-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.guide-card {
+  padding: 16px;
+  border: 1px solid rgba(31, 36, 40, 0.08);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.guide-card h3 {
+  margin: 0 0 12px;
+}
+
+.guide-steps {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.guide-steps li {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.guide-steps strong {
+  color: var(--brand-deep);
+  font-size: 13px;
+}
+
+.guide-steps span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .hero-layout {
   align-items: flex-start;
 }
@@ -1136,6 +1214,31 @@ summary:focus-visible {
 
   .app-body.mobile-tabs-ready .hero-card {
     display: none;
+  }
+
+  .app-body.mobile-tabs-ready .guide-panel {
+    display: block;
+    margin-bottom: 12px;
+    padding: 16px;
+    border-radius: 20px;
+  }
+
+  .guide-panel summary {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .guide-panel summary small {
+    text-align: left;
+  }
+
+  .guide-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .guide-steps li {
+    grid-template-columns: 1fr;
+    gap: 4px;
   }
 
   .app-body.mobile-tabs-ready .ops-grid,
