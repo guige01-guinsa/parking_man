@@ -52,7 +52,6 @@ CREATE TABLE IF NOT EXISTS cctv_search_requests (
   requester_username TEXT NOT NULL,
   photo_path TEXT NOT NULL,
   location TEXT NOT NULL,
-  search_time TEXT NOT NULL,
   search_start_time TEXT NOT NULL,
   search_end_time TEXT NOT NULL,
   content TEXT NOT NULL,
@@ -89,7 +88,6 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS idx_vehicles_site_plate ON vehicles(site_code, plate);
 CREATE INDEX IF NOT EXISTS idx_enforcement_site_created_at ON enforcement_events(site_code, created_at);
-CREATE INDEX IF NOT EXISTS idx_cctv_requests_site_status_time ON cctv_search_requests(site_code, status, search_time);
 CREATE INDEX IF NOT EXISTS idx_cctv_requests_site_requester ON cctv_search_requests(site_code, requester_username);
 CREATE INDEX IF NOT EXISTS idx_cctv_requests_site_assignee ON cctv_search_requests(site_code, assigned_to);
 CREATE INDEX IF NOT EXISTS idx_import_runs_site_imported_at ON import_runs(site_code, imported_at);

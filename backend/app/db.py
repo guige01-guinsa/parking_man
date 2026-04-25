@@ -40,6 +40,82 @@ def table_columns(con: sqlite3.Connection, table_name: str) -> set[str]:
     return {row["name"] for row in rows}
 
 
+def create_cctv_request_indexes(con: sqlite3.Connection) -> None:
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_cctv_requests_site_status_range
+        ON cctv_search_requests(site_code, status, search_start_time, search_end_time)
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_cctv_requests_site_requester
+        ON cctv_search_requests(site_code, requester_username)
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_cctv_requests_site_assignee
+        ON cctv_search_requests(site_code, assigned_to)
+        """
+    )
+
+
+def rebuild_cctv_request_table(con: sqlite3.Connection) -> None:
+    con.execute("DROP TABLE IF EXISTS cctv_search_requests_new")
+    con.execute(
+        """
+        CREATE TABLE cctv_search_requests_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_code TEXT NOT NULL,
+          requester_username TEXT NOT NULL,
+          photo_path TEXT NOT NULL,
+          location TEXT NOT NULL,
+          search_start_time TEXT NOT NULL,
+          search_end_time TEXT NOT NULL,
+          content TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'requested',
+          work_weight INTEGER NOT NULL DEFAULT 1,
+          assigned_to TEXT,
+          instruction TEXT,
+          assigned_by TEXT,
+          assigned_at TEXT,
+          completed_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    con.execute(
+        """
+        INSERT INTO cctv_search_requests_new
+        (id, site_code, requester_username, photo_path, location, search_start_time, search_end_time, content,
+         status, work_weight, assigned_to, instruction, assigned_by, assigned_at, completed_at, created_at, updated_at)
+        SELECT
+          id,
+          site_code,
+          requester_username,
+          photo_path,
+          location,
+          COALESCE(NULLIF(search_start_time, ''), search_time),
+          COALESCE(NULLIF(search_end_time, ''), NULLIF(search_start_time, ''), search_time),
+          content,
+          COALESCE(NULLIF(status, ''), 'requested'),
+          COALESCE(work_weight, 1),
+          assigned_to,
+          instruction,
+          assigned_by,
+          assigned_at,
+          completed_at,
+          created_at,
+          updated_at
+        FROM cctv_search_requests
+        """
+    )
+    con.execute("DROP TABLE cctv_search_requests")
+    con.execute("ALTER TABLE cctv_search_requests_new RENAME TO cctv_search_requests")
+
+
 def ensure_cctv_request_schema(con: sqlite3.Connection) -> None:
     columns = table_columns(con, "cctv_search_requests")
     if not columns:
@@ -50,26 +126,24 @@ def ensure_cctv_request_schema(con: sqlite3.Connection) -> None:
     if "search_end_time" not in columns:
         con.execute("ALTER TABLE cctv_search_requests ADD COLUMN search_end_time TEXT")
 
-    con.execute(
-        """
-        UPDATE cctv_search_requests
-        SET search_start_time = COALESCE(NULLIF(search_start_time, ''), search_time)
-        WHERE search_start_time IS NULL OR search_start_time = ''
-        """
-    )
-    con.execute(
-        """
-        UPDATE cctv_search_requests
-        SET search_end_time = COALESCE(NULLIF(search_end_time, ''), search_start_time, search_time)
-        WHERE search_end_time IS NULL OR search_end_time = ''
-        """
-    )
-    con.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_cctv_requests_site_status_range
-        ON cctv_search_requests(site_code, status, search_start_time, search_end_time)
-        """
-    )
+    if "search_time" in columns:
+        con.execute(
+            """
+            UPDATE cctv_search_requests
+            SET search_start_time = COALESCE(NULLIF(search_start_time, ''), search_time)
+            WHERE search_start_time IS NULL OR search_start_time = ''
+            """
+        )
+        con.execute(
+            """
+            UPDATE cctv_search_requests
+            SET search_end_time = COALESCE(NULLIF(search_end_time, ''), search_start_time, search_time)
+            WHERE search_end_time IS NULL OR search_end_time = ''
+            """
+        )
+        rebuild_cctv_request_table(con)
+
+    create_cctv_request_indexes(con)
 
 
 def init_db() -> None:

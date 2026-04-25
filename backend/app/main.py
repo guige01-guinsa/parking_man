@@ -688,7 +688,7 @@ def api_cctv_requests(request: Request, limit: int = 50):
             ELSE 4
           END,
           work_weight DESC,
-          COALESCE(search_start_time, search_time) ASC,
+          search_start_time ASC,
           created_at DESC
         LIMIT ?
     """
@@ -723,15 +723,14 @@ async def api_cctv_request_create(
         cur = con.execute(
             """
             INSERT INTO cctv_search_requests
-            (site_code, requester_username, photo_path, location, search_time, search_start_time, search_end_time, content)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (site_code, requester_username, photo_path, location, search_start_time, search_end_time, content)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 site_code,
                 session.get("u"),
                 photo_path,
                 normalized_location,
-                normalized_search_start_time,
                 normalized_search_start_time,
                 normalized_search_end_time,
                 normalized_content,

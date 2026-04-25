@@ -189,8 +189,10 @@ class CctvRequestTests(unittest.TestCase):
 
         with db.connect() as con:
             row = con.execute("SELECT search_start_time, search_end_time FROM cctv_search_requests").fetchone()
+            columns = {item["name"] for item in con.execute("PRAGMA table_info(cctv_search_requests)").fetchall()}
         self.assertEqual(row["search_start_time"], "2026-04-25T12:30")
         self.assertEqual(row["search_end_time"], "2026-04-25T12:30")
+        self.assertNotIn("search_time", columns)
 
 
 if __name__ == "__main__":
