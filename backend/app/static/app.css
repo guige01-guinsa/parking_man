@@ -182,8 +182,10 @@ label span {
 
 input[type="text"],
 input[type="password"],
+input[type="datetime-local"],
 select,
-input[type="file"] {
+input[type="file"],
+textarea {
   width: 100%;
   min-height: 54px;
   padding: 12px 14px;
@@ -195,12 +197,19 @@ input[type="file"] {
 
 input[type="text"]:focus,
 input[type="password"]:focus,
+input[type="datetime-local"]:focus,
 select:focus,
-input[type="file"]:focus {
+input[type="file"]:focus,
+textarea:focus {
   outline: 0;
   border-color: rgba(15, 118, 110, 0.42);
   box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
   background: white;
+}
+
+textarea {
+  resize: vertical;
+  line-height: 1.5;
 }
 
 .primary-btn,
@@ -749,8 +758,68 @@ summary:focus-visible {
 }
 
 .log-panel,
+.cctv-panel,
 .admin-panel {
   margin-top: 18px;
+}
+
+.cctv-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.78fr) minmax(0, 1.22fr);
+  gap: 18px;
+  align-items: start;
+  margin-top: 16px;
+}
+
+.cctv-form {
+  display: grid;
+  gap: 14px;
+}
+
+.cctv-list {
+  max-height: 620px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.cctv-item {
+  gap: 10px;
+}
+
+.cctv-content,
+.cctv-instruction-view {
+  line-height: 1.55;
+}
+
+.cctv-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.cctv-meta-row span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(31, 36, 40, 0.06);
+  font-weight: 700;
+}
+
+.cctv-assignment-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 0.9fr 0.9fr;
+  gap: 10px;
+}
+
+.cctv-assignment-grid label,
+.cctv-instruction-label {
+  display: grid;
+  gap: 6px;
 }
 
 .admin-grid {
@@ -901,6 +970,10 @@ summary:focus-visible {
     grid-template-columns: 1fr;
   }
 
+  .cctv-grid {
+    grid-template-columns: 1fr;
+  }
+
   .admin-grid {
     grid-template-columns: 1fr;
   }
@@ -936,6 +1009,7 @@ summary:focus-visible {
   .field-grid,
   .meta-list,
   .save-strip,
+  .cctv-assignment-grid,
   .admin-upload-row,
   .user-form-grid {
     grid-template-columns: 1fr;

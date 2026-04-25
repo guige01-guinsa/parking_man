@@ -81,6 +81,13 @@ class UserUpdateRequest(BaseModel):
     password: str | None = None
 
 
+class CctvAssignmentRequest(BaseModel):
+    assigned_to: str | None = None
+    work_weight: int | None = Field(None, ge=1, le=5)
+    instruction: str | None = None
+    status: str | None = None
+
+
 VALID_USER_ROLES = {"admin", "guard", "viewer"}
 USERNAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{2,31}$")
 ROLE_LABELS = {
@@ -88,6 +95,14 @@ ROLE_LABELS = {
     "guard": "경비",
     "viewer": "조회",
 }
+CCTV_STATUS_LABELS = {
+    "requested": "요청",
+    "assigned": "배정",
+    "in_progress": "진행",
+    "done": "완료",
+    "cancelled": "취소",
+}
+CCTV_STATUSES = set(CCTV_STATUS_LABELS)
 
 
 def app_url(path: str) -> str:
@@ -290,6 +305,20 @@ def normalize_user_role(value: str | None) -> str:
     return role
 
 
+def normalize_cctv_status(value: str | None) -> str:
+    status = str(value or "").strip().lower()
+    if status not in CCTV_STATUSES:
+        raise HTTPException(status_code=400, detail="CCTV 요청 상태를 다시 확인해 주세요.")
+    return status
+
+
+def require_form_text(value: str | None, label: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail=f"{label}을 입력해 주세요.")
+    return text
+
+
 def normalize_new_password(value: str | None, *, required: bool) -> str | None:
     if value is None:
         if required:
@@ -345,12 +374,53 @@ def ensure_not_last_admin(con, username: str, *, next_role: str | None = None, d
 def save_photo(photo: UploadFile) -> str | None:
     if not photo.filename:
         return None
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     suffix = Path(photo.filename).suffix.lower() or ".jpg"
     name = f"{uuid.uuid4().hex}{suffix}"
     file_path = UPLOAD_DIR / name
     with file_path.open("wb") as target:
         shutil.copyfileobj(photo.file, target)
     return app_url(f"/uploads/{name}")
+
+
+def save_photo_bytes(filename: str | None, payload: bytes) -> str:
+    if not filename:
+        raise HTTPException(status_code=400, detail="사진 파일을 선택해 주세요.")
+    if not payload:
+        raise HTTPException(status_code=400, detail="사진 파일이 비어 있습니다.")
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    suffix = Path(filename).suffix.lower() or ".jpg"
+    name = f"{uuid.uuid4().hex}{suffix}"
+    (UPLOAD_DIR / name).write_bytes(payload)
+    return app_url(f"/uploads/{name}")
+
+
+def cctv_request_dict(row: dict[str, Any] | Any) -> dict[str, Any]:
+    data = dict(row)
+    data["status_label"] = CCTV_STATUS_LABELS.get(data.get("status"), data.get("status") or "-")
+    return data
+
+
+def require_cctv_request(con, site_code: str, request_id: int) -> dict[str, Any]:
+    row = con.execute(
+        "SELECT * FROM cctv_search_requests WHERE site_code = ? AND id = ?",
+        (site_code, request_id),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="CCTV 검색요청을 찾을 수 없습니다.")
+    return dict(row)
+
+
+def normalize_cctv_assignee(con, username: str | None) -> str | None:
+    assignee = str(username or "").strip()
+    if not assignee:
+        return None
+    row = con.execute("SELECT username, role FROM users WHERE username = ?", (assignee,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=400, detail="담당자 계정을 찾을 수 없습니다.")
+    if row["role"] not in {"admin", "guard"}:
+        raise HTTPException(status_code=400, detail="담당자는 관리자 또는 경비 권한이어야 합니다.")
+    return row["username"]
 
 
 def auto_sync_registry() -> None:
@@ -564,6 +634,148 @@ def api_users_delete(request: Request, username: str):
         con.commit()
 
     return {"deleted": True, "username": normalized_username}
+
+
+@app.get("/api/cctv/assignees")
+def api_cctv_assignees(request: Request):
+    ensure_ready()
+    require_role(request, {"admin"})
+    with connect() as con:
+        rows = con.execute(
+            """
+            SELECT username, role, created_at
+            FROM users
+            WHERE role IN ('admin', 'guard')
+            ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, username
+            """
+        ).fetchall()
+    return [user_public_dict(dict(row)) for row in rows]
+
+
+@app.get("/api/cctv/requests")
+def api_cctv_requests(request: Request, limit: int = 50):
+    ensure_ready()
+    session = require_role(request, {"admin", "guard", "viewer"})
+    site_code = current_site_code(request)
+    limit = min(max(limit, 1), 100)
+
+    base_query = """
+        SELECT *
+        FROM cctv_search_requests
+        WHERE site_code = ?
+    """
+    params: list[Any] = [site_code]
+    if session.get("r") != "admin":
+        base_query += " AND (requester_username = ? OR assigned_to = ?)"
+        params.extend([session.get("u"), session.get("u")])
+
+    base_query += """
+        ORDER BY
+          CASE status
+            WHEN 'requested' THEN 0
+            WHEN 'assigned' THEN 1
+            WHEN 'in_progress' THEN 2
+            WHEN 'done' THEN 3
+            ELSE 4
+          END,
+          work_weight DESC,
+          search_time ASC,
+          created_at DESC
+        LIMIT ?
+    """
+    params.append(limit)
+    with connect() as con:
+        rows = con.execute(base_query, params).fetchall()
+    return [cctv_request_dict(row) for row in rows]
+
+
+@app.post("/api/cctv/requests")
+async def api_cctv_request_create(
+    request: Request,
+    photo: UploadFile = File(...),
+    location: str = Form(...),
+    search_time: str = Form(...),
+    content: str = Form(...),
+):
+    ensure_ready()
+    session = require_role(request, {"admin", "guard", "viewer"})
+    site_code = current_site_code(request)
+    normalized_location = require_form_text(location, "위치")
+    normalized_search_time = require_form_text(search_time, "검색 시간")
+    normalized_content = require_form_text(content, "요청 내용")
+    payload = await photo.read()
+    photo_path = save_photo_bytes(photo.filename, payload)
+
+    with connect() as con:
+        cur = con.execute(
+            """
+            INSERT INTO cctv_search_requests
+            (site_code, requester_username, photo_path, location, search_time, content)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                site_code,
+                session.get("u"),
+                photo_path,
+                normalized_location,
+                normalized_search_time,
+                normalized_content,
+            ),
+        )
+        row = con.execute("SELECT * FROM cctv_search_requests WHERE id = ?", (cur.lastrowid,)).fetchone()
+        con.commit()
+    return cctv_request_dict(row)
+
+
+@app.patch("/api/cctv/requests/{request_id}")
+def api_cctv_request_update(request: Request, request_id: int, payload: CctvAssignmentRequest):
+    ensure_ready()
+    session = require_role(request, {"admin"})
+    site_code = current_site_code(request)
+    with connect() as con:
+        current = require_cctv_request(con, site_code, request_id)
+        fields_set = payload.model_fields_set
+        updates: list[str] = []
+        values: list[Any] = []
+
+        if "assigned_to" in fields_set:
+            assignee = normalize_cctv_assignee(con, payload.assigned_to)
+            updates.append("assigned_to = ?")
+            values.append(assignee)
+            updates.append("assigned_by = ?")
+            values.append(session.get("u") if assignee else None)
+            updates.append("assigned_at = datetime('now')" if assignee else "assigned_at = NULL")
+            if assignee and "status" not in fields_set and current["status"] == "requested":
+                updates.append("status = ?")
+                values.append("assigned")
+
+        if "work_weight" in fields_set and payload.work_weight is not None:
+            updates.append("work_weight = ?")
+            values.append(payload.work_weight)
+
+        if "instruction" in fields_set:
+            updates.append("instruction = ?")
+            values.append(str(payload.instruction or "").strip() or None)
+
+        next_status: str | None = None
+        if "status" in fields_set and payload.status is not None:
+            next_status = normalize_cctv_status(payload.status)
+            updates.append("status = ?")
+            values.append(next_status)
+            updates.append("completed_at = datetime('now')" if next_status == "done" else "completed_at = NULL")
+
+        if not updates:
+            return cctv_request_dict(current)
+
+        updates.append("updated_at = datetime('now')")
+        values.extend([request_id, site_code])
+        con.execute(
+            f"UPDATE cctv_search_requests SET {', '.join(updates)} WHERE id = ? AND site_code = ?",
+            values,
+        )
+        row = con.execute("SELECT * FROM cctv_search_requests WHERE site_code = ? AND id = ?", (site_code, request_id)).fetchone()
+        con.commit()
+    return cctv_request_dict(row)
 
 
 @app.get("/api/registry/check", response_model=CheckResponse)

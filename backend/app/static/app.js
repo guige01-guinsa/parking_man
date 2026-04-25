@@ -1,5 +1,6 @@
 const rootPath = document.body.dataset.rootPath || "";
 const currentUsername = document.body.dataset.username || "";
+const currentRole = document.body.dataset.role || "";
 const apiUrl = (path) => `${rootPath}${path}`;
 
 const photoInput = document.getElementById("photo");
@@ -36,6 +37,13 @@ const newUserUsernameInput = document.getElementById("new-user-username");
 const newUserPasswordInput = document.getElementById("new-user-password");
 const newUserRoleInput = document.getElementById("new-user-role");
 const userRefreshBtn = document.getElementById("user-refresh-btn");
+const cctvRequestForm = document.getElementById("cctv-request-form");
+const cctvPhotoInput = document.getElementById("cctv-photo");
+const cctvLocationInput = document.getElementById("cctv-location");
+const cctvSearchTimeInput = document.getElementById("cctv-search-time");
+const cctvContentInput = document.getElementById("cctv-content");
+const cctvRequestList = document.getElementById("cctv-request-list");
+const cctvRefreshBtn = document.getElementById("cctv-refresh-btn");
 const geoStatus = document.getElementById("geo-status");
 const statusBanner = document.getElementById("status-banner");
 const quickMemoButtons = Array.from(document.querySelectorAll(".quick-chip"));
@@ -46,6 +54,13 @@ const USER_ROLE_OPTIONS = [
   { value: "viewer", label: "조회", badgeClass: "badge-role-viewer" },
 ];
 const EXCEL_UPLOAD_SUFFIXES = [".xlsx", ".xlsm"];
+const CCTV_STATUS_OPTIONS = [
+  { value: "requested", label: "요청", badgeClass: "badge-idle" },
+  { value: "assigned", label: "배정", badgeClass: "badge-temp" },
+  { value: "in_progress", label: "진행", badgeClass: "badge-temp" },
+  { value: "done", label: "완료", badgeClass: "badge-ok" },
+  { value: "cancelled", label: "취소", badgeClass: "badge-danger" },
+];
 
 let latestRawText = "";
 let latestVerdict = null;
@@ -56,6 +71,7 @@ let latestOcrCandidates = [];
 let currentCheckMatches = [];
 let currentCheckIndex = 0;
 let currentCheckRequestedPlate = "";
+let cctvAssignees = [];
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -148,6 +164,32 @@ function userRoleOption(role) {
 
 function userRoleOptionsMarkup(selectedRole) {
   return USER_ROLE_OPTIONS.map((item) => `<option value="${item.value}" ${item.value === selectedRole ? "selected" : ""}>${item.label}</option>`).join("");
+}
+
+function cctvStatusOption(status) {
+  return CCTV_STATUS_OPTIONS.find((item) => item.value === status) || CCTV_STATUS_OPTIONS[0];
+}
+
+function cctvStatusOptionsMarkup(selectedStatus) {
+  return CCTV_STATUS_OPTIONS.map((item) => `<option value="${item.value}" ${item.value === selectedStatus ? "selected" : ""}>${item.label}</option>`).join("");
+}
+
+function cctvAssigneeOptionsMarkup(selectedUsername) {
+  const options = ['<option value="">담당자 선택</option>'];
+  options.push(
+    ...cctvAssignees.map((user) => {
+      const label = `${user.username} · ${user.role_label || user.role || "-"}`;
+      return `<option value="${escapeHtml(user.username)}" ${user.username === selectedUsername ? "selected" : ""}>${escapeHtml(label)}</option>`;
+    })
+  );
+  return options.join("");
+}
+
+function cctvWeightOptionsMarkup(selectedWeight) {
+  const weight = Number(selectedWeight || 1);
+  return [1, 2, 3, 4, 5]
+    .map((item) => `<option value="${item}" ${item === weight ? "selected" : ""}>가중치 ${item}</option>`)
+    .join("");
 }
 
 function setStatus(message, tone = "idle") {
@@ -532,6 +574,86 @@ function resetUserRow(button) {
   }
 }
 
+function displayDateTime(value) {
+  return String(value || "-").replace("T", " ").slice(0, 16);
+}
+
+function renderCctvAdminControls(row) {
+  if (currentRole !== "admin") {
+    return "";
+  }
+  return `
+    <div class="cctv-assignment-grid">
+      <label>
+        <span>담당자</span>
+        <select data-cctv-assignee>
+          ${cctvAssigneeOptionsMarkup(row.assigned_to || "")}
+        </select>
+      </label>
+      <label>
+        <span>업무 가중치</span>
+        <select data-cctv-weight>
+          ${cctvWeightOptionsMarkup(row.work_weight)}
+        </select>
+      </label>
+      <label>
+        <span>상태</span>
+        <select data-cctv-status>
+          ${cctvStatusOptionsMarkup(row.status)}
+        </select>
+      </label>
+    </div>
+    <label class="cctv-instruction-label">
+      <span>작업지시</span>
+      <textarea data-cctv-instruction rows="2" placeholder="예: 18:20~18:40 103동 출입구 방향 확인">${escapeHtml(row.instruction || "")}</textarea>
+    </label>
+    <div class="user-action-row">
+      <button type="button" class="secondary-btn" data-cctv-save>작업지시 저장</button>
+    </div>
+  `;
+}
+
+function renderCctvRequests(rows) {
+  if (!cctvRequestList) return;
+  if (!rows?.length) {
+    cctvRequestList.className = "list-board empty-state";
+    cctvRequestList.textContent = "등록된 CCTV 검색요청이 없습니다.";
+    return;
+  }
+
+  cctvRequestList.className = "list-board cctv-list";
+  cctvRequestList.innerHTML = rows
+    .map((row) => {
+      const status = cctvStatusOption(row.status);
+      const photo = row.photo_path ? `<a class="contact-action" href="${escapeHtml(row.photo_path)}" target="_blank" rel="noopener">사진 보기</a>` : "";
+      return `
+        <article class="result-item cctv-item" data-cctv-row="${escapeHtml(row.id)}">
+          <div class="result-top">
+            <div>
+              <div class="result-title">${escapeHtml(row.location || "-")}</div>
+              <div class="subtle">요청자 ${escapeHtml(row.requester_username || "-")} · 검색 ${escapeHtml(displayDateTime(row.search_time))}</div>
+            </div>
+            <span class="result-badge ${status.badgeClass}">${escapeHtml(status.label)}</span>
+          </div>
+          <div class="cctv-content">${escapeHtml(row.content || "-")}</div>
+          <div class="cctv-meta-row">
+            <span>가중치 ${escapeHtml(row.work_weight || 1)}</span>
+            <span>담당 ${escapeHtml(row.assigned_to || "미배정")}</span>
+            <span>등록 ${escapeHtml(displayDateTime(row.created_at))}</span>
+            ${photo}
+          </div>
+          ${row.instruction && currentRole !== "admin" ? `<div class="cctv-instruction-view">작업지시: ${escapeHtml(row.instruction)}</div>` : ""}
+          ${renderCctvAdminControls(row)}
+        </article>
+      `;
+    })
+    .join("");
+
+  cctvRequestList.querySelectorAll("[data-cctv-save]").forEach((button) => {
+    button.addEventListener("click", () => saveCctvAssignment(button).catch((error) => alert(error.message)));
+  });
+}
+
 async function fetchJson(url, options = {}) {
   const response = await fetch(url, options);
   if (!response.ok) {
@@ -706,6 +828,68 @@ async function uploadRegistryFiles() {
   setStatus(`${result.saved_count}개 Excel 업로드 및 동기화 완료`, "success");
 }
 
+async function loadCctvAssignees() {
+  if (currentRole !== "admin") return;
+  cctvAssignees = await fetchJson(apiUrl("/api/cctv/assignees"));
+}
+
+async function loadCctvRequests() {
+  if (!cctvRequestList) return;
+  const data = await fetchJson(apiUrl("/api/cctv/requests"));
+  renderCctvRequests(data);
+}
+
+async function createCctvRequest(event) {
+  event.preventDefault();
+  if (!cctvPhotoInput?.files?.length) {
+    alert("사진을 선택해 주세요.");
+    return;
+  }
+  const location = cctvLocationInput?.value.trim() || "";
+  const searchTime = cctvSearchTimeInput?.value.trim() || "";
+  const content = cctvContentInput?.value.trim() || "";
+  if (!location || !searchTime || !content) {
+    alert("사진, 위치, 시간, 내용을 모두 입력해 주세요.");
+    return;
+  }
+
+  setStatus("CCTV 검색요청 등록 중", "active");
+  const formData = new FormData();
+  formData.append("photo", cctvPhotoInput.files[0]);
+  formData.append("location", location);
+  formData.append("search_time", searchTime);
+  formData.append("content", content);
+
+  await fetchJson(apiUrl("/api/cctv/requests"), { method: "POST", body: formData });
+  cctvRequestForm.reset();
+  await loadCctvRequests();
+  setStatus("CCTV 검색요청 등록 완료", "success");
+}
+
+async function saveCctvAssignment(button) {
+  const row = button.closest("[data-cctv-row]");
+  if (!row) return;
+  const requestId = row.dataset.cctvRow;
+  const assignee = row.querySelector("[data-cctv-assignee]")?.value || null;
+  const workWeight = Number(row.querySelector("[data-cctv-weight]")?.value || 1);
+  const status = row.querySelector("[data-cctv-status]")?.value || "requested";
+  const instruction = row.querySelector("[data-cctv-instruction]")?.value || "";
+
+  setStatus(`CCTV 요청 #${requestId} 작업지시 저장 중`, "active");
+  await fetchJson(apiUrl(`/api/cctv/requests/${encodeURIComponent(requestId)}`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      assigned_to: assignee,
+      work_weight: workWeight,
+      instruction,
+      status,
+    }),
+  });
+  await loadCctvRequests();
+  setStatus(`CCTV 요청 #${requestId} 작업지시 저장 완료`, "success");
+}
+
 async function loadUsers() {
   if (!userList) return;
   const data = await fetchJson(apiUrl("/api/users"));
@@ -847,6 +1031,8 @@ document.getElementById("search-btn")?.addEventListener("click", () => searchReg
 document.getElementById("sync-btn")?.addEventListener("click", () => syncRegistry().catch((error) => alert(error.message)));
 uploadRegistryBtn?.addEventListener("click", () => uploadRegistryFiles().catch((error) => alert(error.message)));
 userRefreshBtn?.addEventListener("click", () => loadUsers().catch((error) => alert(error.message)));
+cctvRequestForm?.addEventListener("submit", (event) => createCctvRequest(event).catch((error) => alert(error.message)));
+cctvRefreshBtn?.addEventListener("click", () => loadCctvRequests().catch((error) => alert(error.message)));
 document.getElementById("geo-btn")?.addEventListener("click", loadGeolocation);
 document.getElementById("search-query")?.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
@@ -872,3 +1058,13 @@ loadRecent().catch((error) => {
 });
 loadRegistryStatus().catch(() => {});
 loadUsers().catch(() => {});
+loadCctvAssignees()
+  .catch(() => {})
+  .finally(() => {
+    loadCctvRequests().catch((error) => {
+      if (cctvRequestList) {
+        cctvRequestList.className = "list-board empty-state";
+        cctvRequestList.textContent = error.message;
+      }
+    });
+  });

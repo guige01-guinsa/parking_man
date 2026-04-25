@@ -46,6 +46,25 @@ CREATE TABLE IF NOT EXISTS enforcement_events (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS cctv_search_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  site_code TEXT NOT NULL,
+  requester_username TEXT NOT NULL,
+  photo_path TEXT NOT NULL,
+  location TEXT NOT NULL,
+  search_time TEXT NOT NULL,
+  content TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'requested',
+  work_weight INTEGER NOT NULL DEFAULT 1,
+  assigned_to TEXT,
+  instruction TEXT,
+  assigned_by TEXT,
+  assigned_at TEXT,
+  completed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS ocr_feedback (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   site_code TEXT NOT NULL,
@@ -68,6 +87,9 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS idx_vehicles_site_plate ON vehicles(site_code, plate);
 CREATE INDEX IF NOT EXISTS idx_enforcement_site_created_at ON enforcement_events(site_code, created_at);
+CREATE INDEX IF NOT EXISTS idx_cctv_requests_site_status_time ON cctv_search_requests(site_code, status, search_time);
+CREATE INDEX IF NOT EXISTS idx_cctv_requests_site_requester ON cctv_search_requests(site_code, requester_username);
+CREATE INDEX IF NOT EXISTS idx_cctv_requests_site_assignee ON cctv_search_requests(site_code, assigned_to);
 CREATE INDEX IF NOT EXISTS idx_import_runs_site_imported_at ON import_runs(site_code, imported_at);
 CREATE INDEX IF NOT EXISTS idx_ocr_feedback_site_created_at ON ocr_feedback(site_code, created_at);
 CREATE INDEX IF NOT EXISTS idx_ocr_feedback_site_raw_key ON ocr_feedback(site_code, raw_key);

@@ -179,6 +179,40 @@
       </aside>
     </section>
 
+    <section class="panel cctv-panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">CCTV Request</p>
+          <h3>CCTV 검색요청</h3>
+        </div>
+        <button id="cctv-refresh-btn" type="button" class="ghost-btn">요청 새로고침</button>
+      </div>
+      <div class="cctv-grid">
+        <form id="cctv-request-form" class="cctv-form">
+          <div class="field-grid">
+            <label>
+              <span>사진</span>
+              <input id="cctv-photo" type="file" name="photo" accept="image/*" capture="environment" required>
+            </label>
+            <label>
+              <span>검색 시간</span>
+              <input id="cctv-search-time" type="datetime-local" name="search_time" required>
+            </label>
+          </div>
+          <label>
+            <span>위치</span>
+            <input id="cctv-location" type="text" name="location" placeholder="예: 103동 1층 출입구" autocomplete="off" required>
+          </label>
+          <label>
+            <span>내용</span>
+            <textarea id="cctv-content" name="content" rows="4" placeholder="예: 차량 이동 경로 확인 요청" required></textarea>
+          </label>
+          <button id="cctv-submit-btn" type="submit" class="primary-btn action-tall">검색요청 등록</button>
+        </form>
+        <div id="cctv-request-list" class="list-board empty-state">CCTV 검색요청을 불러오는 중입니다.</div>
+      </div>
+    </section>
+
     <section class="panel log-panel">
       <div class="panel-head">
         <div>
