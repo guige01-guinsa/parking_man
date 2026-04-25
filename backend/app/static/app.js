@@ -259,6 +259,22 @@ function setStatus(message, tone = "idle") {
   statusBanner.className = `status-banner status-${tone}`;
 }
 
+function readStoredValue(key, fallback = "") {
+  try {
+    return window.localStorage?.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStoredValue(key, value) {
+  try {
+    window.localStorage?.setItem(key, value);
+  } catch {
+    // Storage can be unavailable in some embedded browser modes.
+  }
+}
+
 function mobileTabStorageKey() {
   return `parking:${currentSiteCode || "default"}:${currentRole || "role"}:mobile-tab`;
 }
@@ -271,12 +287,16 @@ function initFirstUseGuide() {
   if (!firstUseGuide) {
     return;
   }
-  const saved = localStorage.getItem(firstUseGuideStorageKey());
+  const saved = readStoredValue(firstUseGuideStorageKey(), "");
   if (saved === "0") {
+    firstUseGuide.open = false;
+  } else if (saved === "1") {
+    firstUseGuide.open = true;
+  } else if (window.matchMedia("(max-width: 720px)").matches) {
     firstUseGuide.open = false;
   }
   firstUseGuide.addEventListener("toggle", () => {
-    localStorage.setItem(firstUseGuideStorageKey(), firstUseGuide.open ? "1" : "0");
+    writeStoredValue(firstUseGuideStorageKey(), firstUseGuide.open ? "1" : "0");
   });
 }
 
@@ -307,7 +327,7 @@ function activateMobileTab(tab, options = {}) {
     button.setAttribute("aria-pressed", String(isActive));
   });
 
-  localStorage.setItem(mobileTabStorageKey(), nextTab);
+  writeStoredValue(mobileTabStorageKey(), nextTab);
   document.body.classList.add("mobile-tabs-ready");
 
   if (options.refresh !== false) {
@@ -322,17 +342,17 @@ function initMobileTabs() {
   if (!mobileTabButtons.length || !mobileTabPanels.length) {
     return;
   }
-  const saved = localStorage.getItem(mobileTabStorageKey()) || "enforce";
+  const saved = readStoredValue(mobileTabStorageKey(), "enforce") || "enforce";
   activateMobileTab(saved, { refresh: false, scroll: false });
 }
 
 function persistField(key, value) {
-  localStorage.setItem(`parking:${key}`, value);
+  writeStoredValue(`parking:${key}`, value);
 }
 
 function hydrateFields() {
-  inspectorInput.value = localStorage.getItem("parking:inspector") || "";
-  locationInput.value = localStorage.getItem("parking:location") || "";
+  inspectorInput.value = readStoredValue("parking:inspector", "");
+  locationInput.value = readStoredValue("parking:location", "");
 }
 
 function syncQuickMemoState() {
@@ -1554,7 +1574,8 @@ quickMemoButtons.forEach((button) => {
 });
 
 mobileTabButtons.forEach((button) => {
-  button.addEventListener("click", () => {
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
     activateMobileTab(button.dataset.mobileTab || "enforce");
   });
 });
