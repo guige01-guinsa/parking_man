@@ -531,6 +531,15 @@ summary:focus-visible {
   min-width: 0;
 }
 
+.registry-file-note {
+  white-space: pre-line;
+}
+
+.registry-file-note.is-error {
+  color: var(--danger);
+  font-weight: 800;
+}
+
 .import-file-list {
   display: grid;
   gap: 10px;

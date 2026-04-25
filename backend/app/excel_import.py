@@ -14,6 +14,10 @@ from .plates import normalize_plate, normalize_status
 
 EXCEL_SUFFIXES = {".xlsx", ".xlsm"}
 
+
+def is_temporary_excel_filename(filename: str | os.PathLike[str] | None) -> bool:
+    return Path(str(filename or "")).name.startswith("~$")
+
 FIELD_ALIASES = {
     "plate": {"plate", "carnumber", "platenumber", "차량번호", "번호판", "차번호", "등록번호"},
     "unit": {"unit", "household", "aptunit", "세대", "세대번호", "동호", "동호수", "동호실", "호수"},
@@ -112,7 +116,7 @@ def list_excel_files(source_dir: Path) -> list[Path]:
         [
             path
             for path in source_dir.iterdir()
-            if path.is_file() and path.suffix.lower() in EXCEL_SUFFIXES and not path.name.startswith("~$")
+            if path.is_file() and path.suffix.lower() in EXCEL_SUFFIXES and not is_temporary_excel_filename(path.name)
         ],
         key=lambda item: item.name.lower(),
     )
@@ -122,6 +126,8 @@ def build_safe_excel_filename(filename: str | None, existing_names: set[str] | N
     raw_name = Path(str(filename or "")).name.strip()
     if not raw_name:
         raise ValueError("업로드 파일 이름이 비어 있습니다.")
+    if is_temporary_excel_filename(raw_name):
+        raise ValueError("Excel 임시 잠금 파일은 업로드할 수 없습니다. 원본 파일을 선택해 주세요.")
 
     stem = re.sub(r"[^\w가-힣.-]+", "-", Path(raw_name).stem).strip("-.")
     suffix = Path(raw_name).suffix.lower()

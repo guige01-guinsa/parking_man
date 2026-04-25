@@ -45,6 +45,7 @@ const USER_ROLE_OPTIONS = [
   { value: "guard", label: "경비", badgeClass: "badge-role-guard" },
   { value: "viewer", label: "조회", badgeClass: "badge-role-viewer" },
 ];
+const EXCEL_UPLOAD_SUFFIXES = [".xlsx", ".xlsm"];
 
 let latestRawText = "";
 let latestVerdict = null;
@@ -416,14 +417,48 @@ function renderRegistryStatus(status) {
   `;
 }
 
+function registryFileErrors(files) {
+  return files.flatMap((file) => {
+    const name = file.name || "이름 없는 파일";
+    const lowerName = name.toLowerCase();
+    if (name.startsWith("~$")) {
+      return [`${name}: Excel 임시 잠금 파일입니다. Excel에서 원본 파일을 닫고 실제 파일을 선택해 주세요.`];
+    }
+    if (!EXCEL_UPLOAD_SUFFIXES.some((suffix) => lowerName.endsWith(suffix))) {
+      return [`${name}: .xlsx 또는 .xlsm 파일만 업로드할 수 있습니다.`];
+    }
+    if (file.size <= 0) {
+      return [`${name}: 파일이 비어 있습니다.`];
+    }
+    return [];
+  });
+}
+
+function setRegistryFileNote(message, tone = "idle") {
+  if (!registryFileNote) return;
+  registryFileNote.textContent = message;
+  registryFileNote.className = `subtle registry-file-note ${tone === "error" ? "is-error" : ""}`;
+}
+
 function renderRegistrySelection() {
-  if (!registryFileInput || !registryFileNote) return;
+  if (!registryFileInput || !registryFileNote) return false;
   const files = Array.from(registryFileInput.files || []);
   if (!files.length) {
-    registryFileNote.textContent = "선택된 파일이 없습니다.";
-    return;
+    setRegistryFileNote("선택된 파일이 없습니다.");
+    if (uploadRegistryBtn) uploadRegistryBtn.disabled = false;
+    return false;
   }
-  registryFileNote.textContent = `선택됨: ${files.map((file) => file.name).join(", ")}`;
+
+  const errors = registryFileErrors(files);
+  if (errors.length) {
+    setRegistryFileNote(`선택 오류:\n${errors.join("\n")}`, "error");
+    if (uploadRegistryBtn) uploadRegistryBtn.disabled = true;
+    return false;
+  }
+
+  setRegistryFileNote(`선택됨: ${files.map((file) => file.name).join(", ")}`);
+  if (uploadRegistryBtn) uploadRegistryBtn.disabled = false;
+  return true;
 }
 
 function renderUserList(users) {
@@ -645,6 +680,10 @@ async function uploadRegistryFiles() {
     alert("업로드할 Excel 파일을 먼저 선택해 주세요.");
     return;
   }
+  if (!renderRegistrySelection()) {
+    alert(registryFileNote?.textContent || "Excel 파일 선택 내용을 확인해 주세요.");
+    return;
+  }
 
   setStatus("Excel 업로드 및 동기화 중", "active");
   const formData = new FormData();
@@ -652,7 +691,14 @@ async function uploadRegistryFiles() {
     formData.append("files", file);
   });
 
-  const result = await fetchJson(apiUrl("/api/registry/upload"), { method: "POST", body: formData });
+  let result;
+  try {
+    result = await fetchJson(apiUrl("/api/registry/upload"), { method: "POST", body: formData });
+  } catch (error) {
+    setRegistryFileNote(`업로드 실패:\n${error.message || error}`, "error");
+    setStatus("Excel 업로드 실패", "danger");
+    throw error;
+  }
   registryFileInput.value = "";
   renderRegistrySelection();
   await loadRegistryStatus();

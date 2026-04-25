@@ -656,7 +656,11 @@ async def api_registry_upload(request: Request, files: list[UploadFile] = File(.
     uploaded_paths: list[Path] = []
     try:
         for filename, payload in pending:
-            uploaded = store_registry_upload(IMPORT_DIR, filename, payload, saved_names)
+            try:
+                uploaded = store_registry_upload(IMPORT_DIR, filename, payload, saved_names)
+            except ValueError as exc:
+                display_name = Path(str(filename or "")).name or "이름 없는 파일"
+                raise ValueError(f"{display_name}: {exc}") from exc
             uploaded_paths.append(uploaded)
             saved_names.add(uploaded.name)
         sync_result = sync_registry_from_dir(IMPORT_DIR, current_site_code(request))

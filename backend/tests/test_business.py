@@ -3,7 +3,13 @@ import unittest
 from datetime import date
 from pathlib import Path
 
-from app.excel_import import build_safe_excel_filename, resolve_header_field, store_registry_upload
+from app.excel_import import (
+    build_safe_excel_filename,
+    is_temporary_excel_filename,
+    list_excel_files,
+    resolve_header_field,
+    store_registry_upload,
+)
 from app.plates import evaluate_vehicle_row, extract_plate_candidates, normalize_plate, normalize_status
 
 
@@ -52,7 +58,22 @@ class ExcelHeaderTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 store_registry_upload(Path(temp_dir), "registry.csv", b"bad-data")
 
+    def test_store_registry_upload_rejects_temporary_excel_lock_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "임시 잠금 파일"):
+                store_registry_upload(Path(temp_dir), "~$registry.xlsx", b"bad-data")
+
+    def test_list_excel_files_ignores_temporary_lock_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "registry.xlsx").write_bytes(b"real")
+            (root / "~$registry.xlsx").write_bytes(b"lock")
+            self.assertEqual([path.name for path in list_excel_files(root)], ["registry.xlsx"])
+
+    def test_is_temporary_excel_filename(self):
+        self.assertTrue(is_temporary_excel_filename("~$registry.xlsx"))
+        self.assertFalse(is_temporary_excel_filename("registry.xlsx"))
+
 
 if __name__ == "__main__":
     unittest.main()
-
