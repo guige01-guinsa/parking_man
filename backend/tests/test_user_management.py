@@ -90,6 +90,81 @@ class UserManagementTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 409)
 
+    def test_same_username_can_login_to_different_sites_and_data_is_isolated(self):
+        created_site = self.client.post(
+            "/api/sites",
+            json={
+                "site_code": "APT2200",
+                "name": "테스트 2단지",
+                "admin_username": "admin",
+                "admin_password": "otheradmin123",
+            },
+        )
+        self.assertEqual(created_site.status_code, 200)
+        self.assertEqual(created_site.json()["site_code"], "APT2200")
+
+        with db.connect() as con:
+            con.executemany(
+                """
+                INSERT INTO vehicles
+                (site_code, plate, unit, owner_name, phone, status, valid_from, valid_to, note, source_file, source_sheet)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    ("APT1100", "12가3456", "101-1203", "기본차주", "010-1111-1111", "active", None, None, "기본", "sample.xlsx", "vehicles"),
+                    ("APT2200", "12가3456", "201-2203", "다른차주", "010-2222-2222", "active", None, None, "다른 아파트", "sample.xlsx", "vehicles"),
+                ],
+            )
+            con.commit()
+
+        default_check = self.client.get("/api/registry/check", params={"plate": "12가3456"})
+        self.assertEqual(default_check.status_code, 200)
+        self.assertEqual(default_check.json()["phone"], "010-1111-1111")
+
+        other_client = TestClient(main.app)
+        other_login = other_client.post(
+            "/login",
+            data={"site_code": "APT2200", "username": "admin", "password": "otheradmin123"},
+            follow_redirects=False,
+        )
+        self.assertEqual(other_login.status_code, 302)
+
+        me = other_client.get("/api/me")
+        self.assertEqual(me.status_code, 200)
+        self.assertEqual(me.json()["site_code"], "APT2200")
+
+        other_check = other_client.get("/api/registry/check", params={"plate": "12가3456"})
+        self.assertEqual(other_check.status_code, 200)
+        self.assertEqual(other_check.json()["phone"], "010-2222-2222")
+
+    def test_user_management_is_scoped_to_current_site(self):
+        created_site = self.client.post(
+            "/api/sites",
+            json={
+                "site_code": "APT3300",
+                "name": "테스트 3단지",
+                "admin_username": "remoteadmin",
+                "admin_password": "remoteadmin123",
+            },
+        )
+        self.assertEqual(created_site.status_code, 200)
+
+        default_users = self.client.get("/api/users")
+        self.assertEqual(default_users.status_code, 200)
+        self.assertNotIn("remoteadmin", [row["username"] for row in default_users.json()])
+
+        remote_client = TestClient(main.app)
+        login = remote_client.post(
+            "/login",
+            data={"site_code": "APT3300", "username": "remoteadmin", "password": "remoteadmin123"},
+            follow_redirects=False,
+        )
+        self.assertEqual(login.status_code, 302)
+
+        remote_users = remote_client.get("/api/users")
+        self.assertEqual(remote_users.status_code, 200)
+        self.assertEqual([row["username"] for row in remote_users.json()], ["remoteadmin"])
+
     def test_viewer_role_is_rejected_for_new_updates(self):
         response = self.client.post(
             "/api/users",
@@ -110,6 +185,37 @@ class UserManagementTests(unittest.TestCase):
         with db.connect() as con:
             row = con.execute("SELECT role FROM users WHERE username = ?", ("legacyviewer",)).fetchone()
         self.assertEqual(row["role"], "cleaner")
+
+    def test_init_db_migrates_legacy_users_to_site_scoped_table(self):
+        with db.connect() as con:
+            con.execute("DROP TABLE users")
+            con.execute(
+                """
+                CREATE TABLE users (
+                  username TEXT PRIMARY KEY,
+                  pw_hash TEXT NOT NULL,
+                  role TEXT NOT NULL,
+                  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+                """
+            )
+            con.execute(
+                "INSERT INTO users(username, pw_hash, role) VALUES (?, ?, ?)",
+                ("legacyadmin", main.pbkdf2_hash("legacyadmin123"), "admin"),
+            )
+            con.commit()
+
+        db.init_db()
+
+        with db.connect() as con:
+            columns = {item["name"] for item in con.execute("PRAGMA table_info(users)").fetchall()}
+            row = con.execute(
+                "SELECT site_code, username, role FROM users WHERE site_code = ? AND username = ?",
+                ("APT1100", "legacyadmin"),
+            ).fetchone()
+        self.assertIn("site_code", columns)
+        self.assertIn("id", columns)
+        self.assertEqual(row["role"], "admin")
 
     def test_login_failure_renders_friendly_message(self):
         relogin = TestClient(main.app)

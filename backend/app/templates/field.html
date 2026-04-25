@@ -9,6 +9,7 @@
 <body
   class="app-body"
   data-site-code="{{ site_code }}"
+  data-site-name="{{ site_name }}"
   data-role="{{ role }}"
   data-username="{{ username }}"
   data-import-dir="{{ import_dir }}"
@@ -22,7 +23,7 @@
       <div>
         <p class="eyebrow">Field Enforcement</p>
         <h1>{{ app_title }}</h1>
-        <p class="subtle">{{ site_code }} · {{ username }} · {{ role }}</p>
+        <p class="subtle">{{ site_name }}({{ site_code }}) · {{ username }} · {{ role }}</p>
       </div>
       <form method="post" action="{{ request.url_for('logout') }}">
         <button type="submit" class="ghost-btn">로그아웃</button>
@@ -302,6 +303,44 @@
             </div>
           </form>
           <div id="user-list" class="list-board empty-state">사용자 목록을 불러오는 중입니다.</div>
+        </article>
+
+        <article class="admin-section">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Sites</p>
+              <h3>아파트 등록 및 현황</h3>
+            </div>
+            <button id="site-refresh-btn" type="button" class="ghost-btn">목록 새로고침</button>
+          </div>
+          <form id="site-create-form" class="admin-upload-box">
+            <div>
+              <p class="eyebrow">Create Apartment</p>
+              <p class="subtle">새 아파트를 등록하고 해당 아파트의 초기 관리자 계정을 함께 만듭니다.</p>
+            </div>
+            <div class="field-grid user-form-grid">
+              <label>
+                <span>아파트 코드</span>
+                <input id="new-site-code" type="text" placeholder="예: APT2200" autocomplete="off" required>
+              </label>
+              <label>
+                <span>아파트명</span>
+                <input id="new-site-name" type="text" placeholder="예: 한빛마을 2단지" autocomplete="off" required>
+              </label>
+            </div>
+            <div class="field-grid user-form-grid">
+              <label>
+                <span>초기 관리자 아이디</span>
+                <input id="new-site-admin-username" type="text" placeholder="예: admin" autocomplete="off" required>
+              </label>
+              <label>
+                <span>초기 관리자 비밀번호</span>
+                <input id="new-site-admin-password" type="password" placeholder="8자 이상" required>
+              </label>
+            </div>
+            <button id="create-site-btn" type="submit" class="primary-btn action-tall">아파트 등록</button>
+          </form>
+          <div id="site-list" class="list-board empty-state">아파트 목록을 불러오는 중입니다.</div>
         </article>
       </div>
     </section>

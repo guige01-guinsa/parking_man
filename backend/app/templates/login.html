@@ -54,6 +54,10 @@
 
         <form method="post" action="{{ request.url_for('login_submit') }}" class="auth-form">
           <label>
+            <span>아파트 코드</span>
+            <input type="text" name="site_code" value="{{ site_code or '' }}" placeholder="예: APT1100" autocomplete="organization" required>
+          </label>
+          <label>
             <span>아이디</span>
             <input type="text" name="username" value="{{ username or '' }}" placeholder="예: guard01" autocomplete="username" required>
           </label>

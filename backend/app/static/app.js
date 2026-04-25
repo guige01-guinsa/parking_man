@@ -1,4 +1,6 @@
 const rootPath = document.body.dataset.rootPath || "";
+const currentSiteCode = document.body.dataset.siteCode || "";
+const currentSiteName = document.body.dataset.siteName || currentSiteCode;
 const currentUsername = document.body.dataset.username || "";
 const currentRole = document.body.dataset.role || "";
 const apiUrl = (path) => `${rootPath}${path}`;
@@ -37,6 +39,13 @@ const newUserUsernameInput = document.getElementById("new-user-username");
 const newUserPasswordInput = document.getElementById("new-user-password");
 const newUserRoleInput = document.getElementById("new-user-role");
 const userRefreshBtn = document.getElementById("user-refresh-btn");
+const siteList = document.getElementById("site-list");
+const siteCreateForm = document.getElementById("site-create-form");
+const newSiteCodeInput = document.getElementById("new-site-code");
+const newSiteNameInput = document.getElementById("new-site-name");
+const newSiteAdminUsernameInput = document.getElementById("new-site-admin-username");
+const newSiteAdminPasswordInput = document.getElementById("new-site-admin-password");
+const siteRefreshBtn = document.getElementById("site-refresh-btn");
 const cctvRequestForm = document.getElementById("cctv-request-form");
 const cctvPhotoInput = document.getElementById("cctv-photo");
 const cctvLocationInput = document.getElementById("cctv-location");
@@ -458,6 +467,7 @@ function renderRegistryStatus(status) {
         <span class="result-title">등록차량 ${escapeHtml(status.vehicle_count)}</span>
         <span class="result-badge ${badgeClass(last?.status === "success" ? "OK" : last?.status === "failed" ? "BLOCKED" : "IDLE")}">${escapeHtml(last?.status || "대기")}</span>
       </div>
+      <div>아파트: ${escapeHtml(status.site_name || currentSiteName || "-")} (${escapeHtml(status.site_code || currentSiteCode || "-")})</div>
       <div>폴더: ${escapeHtml(status.import_dir)}</div>
       <div class="subtle">${escapeHtml(last?.message || "아직 동기화 이력이 없습니다.")}</div>
       <div class="subtle">AI 학습 누적: ${escapeHtml(learning.total_feedback || 0)}건 / 사용자 교정: ${escapeHtml(learning.corrected_feedback || 0)}건</div>
@@ -532,7 +542,7 @@ function renderUserList(users) {
                 <span>${escapeHtml(user.username)}</span>
                 ${isCurrent ? '<span class="self-chip">내 계정</span>' : ""}
               </div>
-              <div class="subtle">생성일 ${escapeHtml(user.created_at || "-")}</div>
+              <div class="subtle">${escapeHtml(user.site_code || currentSiteCode || "-")} · 생성일 ${escapeHtml(user.created_at || "-")}</div>
             </div>
             <span class="result-badge ${role.badgeClass}">${escapeHtml(role.label)}</span>
           </div>
@@ -567,6 +577,37 @@ function renderUserList(users) {
   userList.querySelectorAll("[data-user-delete]").forEach((button) => {
     button.addEventListener("click", () => deleteUserRow(button).catch((error) => alert(error.message)));
   });
+}
+
+function renderSiteList(sites) {
+  if (!siteList) return;
+  if (!sites?.length) {
+    siteList.className = "list-board empty-state";
+    siteList.textContent = "등록된 아파트가 없습니다.";
+    return;
+  }
+
+  siteList.className = "list-board";
+  siteList.innerHTML = sites
+    .map((site) => {
+      const isCurrent = site.site_code === currentSiteCode;
+      return `
+        <article class="result-item">
+          <div class="result-top">
+            <div>
+              <div class="result-title user-title">
+                <span>${escapeHtml(site.name || site.site_code || "-")}</span>
+                ${isCurrent ? '<span class="self-chip">현재 아파트</span>' : ""}
+              </div>
+              <div class="subtle">${escapeHtml(site.site_code || "-")} · 생성일 ${escapeHtml(site.created_at || "-")}</div>
+            </div>
+            <span class="result-badge badge-idle">사용자 ${escapeHtml(site.users_count || 0)}</span>
+          </div>
+          <div class="subtle">등록차량 ${escapeHtml(site.vehicles_count || 0)}대</div>
+        </article>
+      `;
+    })
+    .join("");
 }
 
 function resetUserRow(button) {
@@ -919,6 +960,42 @@ async function loadUsers() {
   renderUserList(data);
 }
 
+async function loadSites() {
+  if (!siteList) return;
+  const data = await fetchJson(apiUrl("/api/sites"));
+  renderSiteList(data);
+}
+
+async function createSite() {
+  if (!newSiteCodeInput || !newSiteNameInput || !newSiteAdminUsernameInput || !newSiteAdminPasswordInput) return;
+
+  const siteCode = newSiteCodeInput.value.trim().toUpperCase();
+  const name = newSiteNameInput.value.trim();
+  const adminUsername = newSiteAdminUsernameInput.value.trim().toLowerCase();
+  const adminPassword = newSiteAdminPasswordInput.value;
+
+  if (!siteCode || !name || !adminUsername || !adminPassword) {
+    alert("아파트 코드, 아파트명, 초기 관리자 계정을 모두 입력해 주세요.");
+    return;
+  }
+
+  setStatus(`아파트 ${siteCode} 등록 중`, "active");
+  await fetchJson(apiUrl("/api/sites"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      site_code: siteCode,
+      name,
+      admin_username: adminUsername,
+      admin_password: adminPassword,
+    }),
+  });
+
+  siteCreateForm?.reset();
+  await loadSites();
+  setStatus(`아파트 ${siteCode} 등록 완료`, "success");
+}
+
 async function createUser() {
   if (!newUserUsernameInput || !newUserPasswordInput || !newUserRoleInput) return;
 
@@ -1054,6 +1131,7 @@ document.getElementById("search-btn")?.addEventListener("click", () => searchReg
 document.getElementById("sync-btn")?.addEventListener("click", () => syncRegistry().catch((error) => alert(error.message)));
 uploadRegistryBtn?.addEventListener("click", () => uploadRegistryFiles().catch((error) => alert(error.message)));
 userRefreshBtn?.addEventListener("click", () => loadUsers().catch((error) => alert(error.message)));
+siteRefreshBtn?.addEventListener("click", () => loadSites().catch((error) => alert(error.message)));
 cctvRequestForm?.addEventListener("submit", (event) => createCctvRequest(event).catch((error) => alert(error.message)));
 cctvRefreshBtn?.addEventListener("click", () => loadCctvRequests().catch((error) => alert(error.message)));
 document.getElementById("geo-btn")?.addEventListener("click", loadGeolocation);
@@ -1066,6 +1144,10 @@ document.getElementById("search-query")?.addEventListener("keydown", (event) => 
 userCreateForm?.addEventListener("submit", (event) => {
   event.preventDefault();
   createUser().catch((error) => alert(error.message));
+});
+siteCreateForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  createSite().catch((error) => alert(error.message));
 });
 
 hydrateFields();
@@ -1081,6 +1163,7 @@ loadRecent().catch((error) => {
 });
 loadRegistryStatus().catch(() => {});
 loadUsers().catch(() => {});
+loadSites().catch(() => {});
 loadCctvAssignees()
   .catch(() => {})
   .finally(() => {

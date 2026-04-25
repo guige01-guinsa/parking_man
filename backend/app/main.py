@@ -15,7 +15,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 from .auth import COOKIE_NAME, make_session, pbkdf2_hash, pbkdf2_verify, read_session, require_role
-from .db import DEFAULT_SITE_CODE, connect, init_db, maybe_seed_demo, normalize_site_code, seed_users
+from .db import DEFAULT_SITE_CODE, DEFAULT_SITE_NAME, connect, init_db, maybe_seed_demo, normalize_site_code, seed_users
 from .excel_import import describe_excel_files, store_registry_upload, sync_registry_from_dir
 from .ocr_learning import get_learning_candidates, get_learning_status, parse_candidates_json, record_ocr_feedback
 from .ocr import scan_plate_image
@@ -47,6 +47,7 @@ _ready_lock = threading.Lock()
 _app_ready = False
 LOGIN_INVALID_MESSAGE = "로그인에 실패했습니다. 아이디와 비밀번호를 다시 확인해 주세요."
 LOGIN_FORMAT_MESSAGE = "아이디 형식을 다시 확인해 주세요. 영문 소문자와 숫자를 사용해 입력할 수 있습니다."
+LOGIN_SITE_FORMAT_MESSAGE = "아파트 코드는 영문, 숫자, 하이픈(-), 밑줄(_)만 사용해 2~32자로 입력해 주세요."
 
 
 class CheckMatch(BaseModel):
@@ -81,6 +82,13 @@ class UserUpdateRequest(BaseModel):
     password: str | None = None
 
 
+class SiteCreateRequest(BaseModel):
+    site_code: str
+    name: str
+    admin_username: str
+    admin_password: str
+
+
 class CctvAssignmentRequest(BaseModel):
     assigned_to: str | None = None
     work_weight: int | None = Field(None, ge=1, le=5)
@@ -89,6 +97,7 @@ class CctvAssignmentRequest(BaseModel):
 
 
 USERNAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{2,31}$")
+SITE_CODE_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9_-]{1,31}$")
 ROLE_LABELS = {
     "admin": "관리자",
     "director": "소장",
@@ -129,19 +138,87 @@ def session_cookie_path() -> str:
     return ROOT_PATH or "/"
 
 
-def render_login_page(request: Request, *, status_code: int = 200, username: str = "", error: str | None = None):
+def render_login_page(
+    request: Request,
+    *,
+    status_code: int = 200,
+    username: str = "",
+    site_code: str = DEFAULT_SITE_CODE,
+    error: str | None = None,
+):
     return templates.TemplateResponse(
         request=request,
         name="login.html",
         context={
             "app_title": APP_TITLE,
             "username": username,
+            "site_code": site_code,
             "login_error": error,
             "support_kakao_url": SUPPORT_KAKAO_URL,
             "support_kakao_label": SUPPORT_KAKAO_LABEL,
         },
         status_code=status_code,
     )
+
+
+def normalize_login_site_code(value: str | None) -> str:
+    site_code = normalize_site_code(value)
+    if not SITE_CODE_PATTERN.fullmatch(site_code):
+        raise HTTPException(status_code=400, detail=LOGIN_SITE_FORMAT_MESSAGE)
+    return site_code
+
+
+def normalize_required_site_code(value: str | None) -> str:
+    if not str(value or "").strip():
+        raise HTTPException(status_code=400, detail="아파트 코드를 입력해 주세요.")
+    return normalize_login_site_code(value)
+
+
+def normalize_site_name(value: str | None) -> str:
+    name = str(value or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="아파트명을 입력해 주세요.")
+    if len(name) > 80:
+        raise HTTPException(status_code=400, detail="아파트명은 80자 이내로 입력해 주세요.")
+    return name
+
+
+def site_storage_key(site_code: str) -> str:
+    key = re.sub(r"[^A-Z0-9_-]+", "-", normalize_site_code(site_code)).strip("-_").lower()
+    return key or normalize_site_code(DEFAULT_SITE_CODE).lower()
+
+
+def site_import_dir(site_code: str) -> Path:
+    normalized_site = normalize_site_code(site_code)
+    if normalized_site == normalize_site_code(DEFAULT_SITE_CODE):
+        return IMPORT_DIR
+    return IMPORT_DIR / site_storage_key(normalized_site)
+
+
+def site_upload_dir(site_code: str) -> Path:
+    return UPLOAD_DIR / site_storage_key(site_code)
+
+
+def site_upload_url(site_code: str, filename: str) -> str:
+    return app_url(f"/uploads/{site_storage_key(site_code)}/{filename}")
+
+
+def site_public_dict(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    return {
+        "site_code": row["site_code"],
+        "name": row["name"],
+        "created_at": row["created_at"],
+        "users_count": row.get("users_count", 0),
+        "vehicles_count": row.get("vehicles_count", 0),
+    }
+
+
+def site_name_for_code(site_code: str) -> str:
+    with connect() as con:
+        row = con.execute("SELECT name FROM sites WHERE site_code = ?", (normalize_site_code(site_code),)).fetchone()
+    return row["name"] if row else normalize_site_code(site_code)
 
 
 def current_site_code(request: Request) -> str:
@@ -361,6 +438,7 @@ def user_public_dict(row: dict[str, Any] | None) -> dict[str, Any] | None:
     if not row:
         return None
     return {
+        "site_code": row["site_code"],
         "username": row["username"],
         "role": row["role"],
         "role_label": ROLE_LABELS.get(row["role"], row["role"]),
@@ -368,51 +446,57 @@ def user_public_dict(row: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
-def require_existing_user(con, username: str) -> dict[str, Any]:
+def require_existing_user(con, site_code: str, username: str) -> dict[str, Any]:
     row = con.execute(
-        "SELECT username, role, created_at FROM users WHERE username = ?",
-        (username,),
+        "SELECT site_code, username, role, created_at FROM users WHERE site_code = ? AND username = ?",
+        (normalize_site_code(site_code), username),
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="해당 사용자를 찾을 수 없습니다.")
     return dict(row)
 
 
-def ensure_not_last_admin(con, username: str, *, next_role: str | None = None, deleting: bool = False) -> None:
-    target = require_existing_user(con, username)
+def ensure_not_last_admin(con, site_code: str, username: str, *, next_role: str | None = None, deleting: bool = False) -> None:
+    normalized_site = normalize_site_code(site_code)
+    target = require_existing_user(con, normalized_site, username)
     if target["role"] != "admin":
         return
 
     if not deleting and (next_role is None or next_role == "admin"):
         return
 
-    admin_count = con.execute("SELECT COUNT(*) AS cnt FROM users WHERE role = 'admin'").fetchone()["cnt"]
+    admin_count = con.execute(
+        "SELECT COUNT(*) AS cnt FROM users WHERE site_code = ? AND role = 'admin'",
+        (normalized_site,),
+    ).fetchone()["cnt"]
     if int(admin_count) <= 1:
         raise HTTPException(status_code=400, detail="마지막 관리자 계정은 삭제하거나 다른 권한으로 변경할 수 없습니다.")
 
 
-def save_photo(photo: UploadFile) -> str | None:
+def save_photo(photo: UploadFile, site_code: str) -> str | None:
     if not photo.filename:
         return None
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    target_dir = site_upload_dir(site_code)
+    target_dir.mkdir(parents=True, exist_ok=True)
     suffix = Path(photo.filename).suffix.lower() or ".jpg"
     name = f"{uuid.uuid4().hex}{suffix}"
-    file_path = UPLOAD_DIR / name
+    file_path = target_dir / name
     with file_path.open("wb") as target:
         shutil.copyfileobj(photo.file, target)
-    return app_url(f"/uploads/{name}")
+    return site_upload_url(site_code, name)
 
 
-def save_photo_bytes(filename: str | None, payload: bytes) -> str:
+def save_photo_bytes(filename: str | None, payload: bytes, site_code: str) -> str:
     if not filename:
         raise HTTPException(status_code=400, detail="사진 파일을 선택해 주세요.")
     if not payload:
         raise HTTPException(status_code=400, detail="사진 파일이 비어 있습니다.")
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    target_dir = site_upload_dir(site_code)
+    target_dir.mkdir(parents=True, exist_ok=True)
     suffix = Path(filename).suffix.lower() or ".jpg"
     name = f"{uuid.uuid4().hex}{suffix}"
-    (UPLOAD_DIR / name).write_bytes(payload)
-    return app_url(f"/uploads/{name}")
+    (target_dir / name).write_bytes(payload)
+    return site_upload_url(site_code, name)
 
 
 def cctv_request_dict(row: dict[str, Any] | Any) -> dict[str, Any]:
@@ -435,11 +519,14 @@ def require_cctv_request(con, site_code: str, request_id: int) -> dict[str, Any]
     return dict(row)
 
 
-def normalize_cctv_assignee(con, username: str | None) -> str | None:
+def normalize_cctv_assignee(con, site_code: str, username: str | None) -> str | None:
     assignee = str(username or "").strip()
     if not assignee:
         return None
-    row = con.execute("SELECT username, role FROM users WHERE username = ?", (assignee,)).fetchone()
+    row = con.execute(
+        "SELECT username, role FROM users WHERE site_code = ? AND username = ?",
+        (normalize_site_code(site_code), assignee),
+    ).fetchone()
     if not row:
         raise HTTPException(status_code=400, detail="담당자 계정을 찾을 수 없습니다.")
     if row["role"] not in VALID_USER_ROLES:
@@ -448,13 +535,22 @@ def normalize_cctv_assignee(con, username: str | None) -> str | None:
 
 
 def auto_sync_registry() -> None:
-    excel_files = [path for path in IMPORT_DIR.iterdir() if path.is_file() and path.suffix.lower() in {".xlsx", ".xlsm"} and not path.name.startswith("~$")]
-    if not excel_files:
-        return
-    try:
-        sync_registry_from_dir(IMPORT_DIR, DEFAULT_SITE_CODE)
-    except Exception as exc:
-        print(f"[startup] registry sync failed: {exc}")
+    with connect() as con:
+        site_codes = [row["site_code"] for row in con.execute("SELECT site_code FROM sites ORDER BY site_code").fetchall()]
+
+    for site_code in site_codes:
+        source_dir = site_import_dir(site_code)
+        excel_files = [
+            path
+            for path in source_dir.iterdir()
+            if source_dir.exists() and path.is_file() and path.suffix.lower() in {".xlsx", ".xlsm"} and not path.name.startswith("~$")
+        ] if source_dir.exists() else []
+        if not excel_files:
+            continue
+        try:
+            sync_registry_from_dir(source_dir, site_code)
+        except Exception as exc:
+            print(f"[startup] registry sync failed for {site_code}: {exc}")
 
 
 @app.on_event("startup")
@@ -490,15 +586,31 @@ def login_page(request: Request):
         return RedirectResponse(url=app_url("/field"), status_code=302)
     if not LOCAL_LOGIN_ENABLED:
         return HTMLResponse("<h2>통합 로그인 모드입니다.</h2>", status_code=403)
-    return render_login_page(request)
+    return render_login_page(request, site_code=DEFAULT_SITE_CODE)
 
 
 @app.post("/login")
-def login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
+def login_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    site_code: str | None = Form(None),
+):
     if not LOCAL_LOGIN_ENABLED:
         raise HTTPException(status_code=403, detail="통합 로그인 전용입니다.")
 
     ensure_ready()
+    raw_site_code = str(site_code or DEFAULT_SITE_CODE).strip()
+    try:
+        user_site_code = normalize_login_site_code(raw_site_code)
+    except HTTPException:
+        return render_login_page(
+            request,
+            status_code=400,
+            username=str(username or "").strip(),
+            site_code=raw_site_code,
+            error=LOGIN_SITE_FORMAT_MESSAGE,
+        )
     try:
         user_name = normalize_username(username)
     except HTTPException:
@@ -506,19 +618,24 @@ def login_submit(request: Request, username: str = Form(...), password: str = Fo
             request,
             status_code=400,
             username=str(username or "").strip(),
+            site_code=user_site_code,
             error=LOGIN_FORMAT_MESSAGE,
         )
     with connect() as con:
-        row = con.execute("SELECT * FROM users WHERE username = ?", (user_name,)).fetchone()
+        row = con.execute(
+            "SELECT * FROM users WHERE site_code = ? AND username = ?",
+            (user_site_code, user_name),
+        ).fetchone()
     if not row or not pbkdf2_verify(password, row["pw_hash"]):
         return render_login_page(
             request,
             status_code=401,
             username=user_name,
+            site_code=user_site_code,
             error=LOGIN_INVALID_MESSAGE,
         )
 
-    token = make_session(user_name, row["role"], normalize_site_code(DEFAULT_SITE_CODE))
+    token = make_session(user_name, row["role"], user_site_code)
     response = RedirectResponse(url=app_url("/field"), status_code=302)
     response.set_cookie(
         COOKIE_NAME,
@@ -541,16 +658,18 @@ def logout():
 def field_page(request: Request):
     ensure_ready()
     session = require_role(request, VIEW_ROLES)
+    site_code = normalize_site_code(session.get("sc"))
     return templates.TemplateResponse(
         request=request,
         name="field.html",
         context={
             "app_title": APP_TITLE,
-            "site_code": normalize_site_code(session.get("sc")),
+            "site_code": site_code,
+            "site_name": site_name_for_code(site_code),
             "role": session.get("r"),
             "username": session.get("u"),
             "is_admin": session.get("r") == "admin",
-            "import_dir": str(IMPORT_DIR),
+            "import_dir": str(site_import_dir(site_code)),
             "ocr_provider": os.getenv("PARKING_OCR_PROVIDER", "tesseract"),
         },
     )
@@ -564,6 +683,7 @@ def api_me(request: Request):
         "username": session.get("u"),
         "role": session.get("r"),
         "site_code": normalize_site_code(session.get("sc")),
+        "site_name": site_name_for_code(session.get("sc")),
     }
 
 
@@ -571,13 +691,16 @@ def api_me(request: Request):
 def api_users_list(request: Request):
     ensure_ready()
     require_role(request, {"admin"})
+    site_code = current_site_code(request)
     with connect() as con:
         rows = con.execute(
             f"""
-            SELECT username, role, created_at
+            SELECT site_code, username, role, created_at
             FROM users
+            WHERE site_code = ?
             ORDER BY {role_order_case()}, username
-            """
+            """,
+            (site_code,),
         ).fetchall()
     return [user_public_dict(dict(row)) for row in rows]
 
@@ -586,21 +709,25 @@ def api_users_list(request: Request):
 def api_users_create(request: Request, payload: UserCreateRequest):
     ensure_ready()
     require_role(request, {"admin"})
+    site_code = current_site_code(request)
 
     username = normalize_username(payload.username)
     role = normalize_user_role(payload.role)
     password = normalize_new_password(payload.password, required=True)
 
     with connect() as con:
-        exists = con.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone()
+        exists = con.execute(
+            "SELECT 1 FROM users WHERE site_code = ? AND username = ?",
+            (site_code, username),
+        ).fetchone()
         if exists:
             raise HTTPException(status_code=409, detail="이미 사용 중인 아이디입니다.")
 
         con.execute(
-            "INSERT INTO users(username, pw_hash, role) VALUES (?, ?, ?)",
-            (username, pbkdf2_hash(password), role),
+            "INSERT INTO users(site_code, username, pw_hash, role) VALUES (?, ?, ?, ?)",
+            (site_code, username, pbkdf2_hash(password), role),
         )
-        row = require_existing_user(con, username)
+        row = require_existing_user(con, site_code, username)
         con.commit()
     return user_public_dict(row)
 
@@ -609,17 +736,18 @@ def api_users_create(request: Request, payload: UserCreateRequest):
 def api_users_update(request: Request, username: str, payload: UserUpdateRequest):
     ensure_ready()
     session = require_role(request, {"admin"})
+    site_code = current_site_code(request)
     normalized_username = normalize_username(username)
     next_role = normalize_user_role(payload.role) if payload.role is not None else None
     next_password = normalize_new_password(payload.password, required=False)
 
     with connect() as con:
-        current = require_existing_user(con, normalized_username)
+        current = require_existing_user(con, site_code, normalized_username)
 
         if normalized_username == session.get("u") and next_role is not None and next_role != current["role"]:
             raise HTTPException(status_code=400, detail="현재 로그인한 본인 계정의 권한은 여기서 변경할 수 없습니다.")
 
-        ensure_not_last_admin(con, normalized_username, next_role=next_role, deleting=False)
+        ensure_not_last_admin(con, site_code, normalized_username, next_role=next_role, deleting=False)
 
         fields: list[str] = []
         values: list[Any] = []
@@ -635,9 +763,9 @@ def api_users_update(request: Request, username: str, payload: UserUpdateRequest
         if not fields:
             return user_public_dict(current)
 
-        values.append(normalized_username)
-        con.execute(f"UPDATE users SET {', '.join(fields)} WHERE username = ?", values)
-        row = require_existing_user(con, normalized_username)
+        values.extend([site_code, normalized_username])
+        con.execute(f"UPDATE users SET {', '.join(fields)} WHERE site_code = ? AND username = ?", values)
+        row = require_existing_user(con, site_code, normalized_username)
         con.commit()
     return user_public_dict(row)
 
@@ -646,31 +774,98 @@ def api_users_update(request: Request, username: str, payload: UserUpdateRequest
 def api_users_delete(request: Request, username: str):
     ensure_ready()
     session = require_role(request, {"admin"})
+    site_code = current_site_code(request)
     normalized_username = normalize_username(username)
 
     if normalized_username == session.get("u"):
         raise HTTPException(status_code=400, detail="현재 로그인한 계정은 삭제할 수 없습니다.")
 
     with connect() as con:
-        require_existing_user(con, normalized_username)
-        ensure_not_last_admin(con, normalized_username, deleting=True)
-        con.execute("DELETE FROM users WHERE username = ?", (normalized_username,))
+        require_existing_user(con, site_code, normalized_username)
+        ensure_not_last_admin(con, site_code, normalized_username, deleting=True)
+        con.execute("DELETE FROM users WHERE site_code = ? AND username = ?", (site_code, normalized_username))
         con.commit()
 
     return {"deleted": True, "username": normalized_username}
+
+
+@app.get("/api/sites")
+def api_sites_list(request: Request):
+    ensure_ready()
+    require_role(request, {"admin"})
+    with connect() as con:
+        rows = con.execute(
+            """
+            SELECT
+              s.site_code,
+              s.name,
+              s.created_at,
+              COUNT(DISTINCT u.id) AS users_count,
+              COUNT(DISTINCT v.plate) AS vehicles_count
+            FROM sites s
+            LEFT JOIN users u ON u.site_code = s.site_code
+            LEFT JOIN vehicles v ON v.site_code = s.site_code
+            GROUP BY s.site_code, s.name, s.created_at
+            ORDER BY s.site_code
+            """
+        ).fetchall()
+    return [site_public_dict(dict(row)) for row in rows]
+
+
+@app.post("/api/sites")
+def api_sites_create(request: Request, payload: SiteCreateRequest):
+    ensure_ready()
+    require_role(request, {"admin"})
+
+    site_code = normalize_required_site_code(payload.site_code)
+    site_name = normalize_site_name(payload.name)
+    admin_username = normalize_username(payload.admin_username)
+    admin_password = normalize_new_password(payload.admin_password, required=True)
+
+    with connect() as con:
+        exists = con.execute("SELECT 1 FROM sites WHERE site_code = ?", (site_code,)).fetchone()
+        if exists:
+            raise HTTPException(status_code=409, detail="이미 등록된 아파트 코드입니다.")
+
+        con.execute("INSERT INTO sites(site_code, name) VALUES (?, ?)", (site_code, site_name))
+        con.execute(
+            "INSERT INTO users(site_code, username, pw_hash, role) VALUES (?, ?, ?, 'admin')",
+            (site_code, admin_username, pbkdf2_hash(admin_password)),
+        )
+        row = con.execute(
+            """
+            SELECT
+              s.site_code,
+              s.name,
+              s.created_at,
+              COUNT(DISTINCT u.id) AS users_count,
+              COUNT(DISTINCT v.plate) AS vehicles_count
+            FROM sites s
+            LEFT JOIN users u ON u.site_code = s.site_code
+            LEFT JOIN vehicles v ON v.site_code = s.site_code
+            WHERE s.site_code = ?
+            GROUP BY s.site_code, s.name, s.created_at
+            """,
+            (site_code,),
+        ).fetchone()
+        con.commit()
+    return site_public_dict(dict(row))
 
 
 @app.get("/api/cctv/assignees")
 def api_cctv_assignees(request: Request):
     ensure_ready()
     require_role(request, CCTV_ASSIGNMENT_ROLES)
+    site_code = current_site_code(request)
     with connect() as con:
         rows = con.execute(
             f"""
-            SELECT username, role, created_at
+            SELECT site_code, username, role, created_at
             FROM users
+            WHERE site_code = ?
             ORDER BY {role_order_case()}, username
-            """
+            """,
+            (site_code,),
         ).fetchall()
     return [user_public_dict(dict(row)) for row in rows]
 
@@ -732,7 +927,7 @@ async def api_cctv_request_create(
     validate_cctv_time_range(normalized_search_start_time, normalized_search_end_time)
     normalized_content = require_form_text(content, "요청 내용")
     payload = await photo.read()
-    photo_path = save_photo_bytes(photo.filename, payload)
+    photo_path = save_photo_bytes(photo.filename, payload, site_code)
 
     with connect() as con:
         cur = con.execute(
@@ -768,7 +963,7 @@ def api_cctv_request_update(request: Request, request_id: int, payload: CctvAssi
         values: list[Any] = []
 
         if "assigned_to" in fields_set:
-            assignee = normalize_cctv_assignee(con, payload.assigned_to)
+            assignee = normalize_cctv_assignee(con, site_code, payload.assigned_to)
             updates.append("assigned_to = ?")
             values.append(assignee)
             updates.append("assigned_by = ?")
@@ -845,6 +1040,7 @@ def api_registry_status(request: Request):
     ensure_ready()
     require_role(request, VIEW_ROLES)
     site_code = current_site_code(request)
+    source_dir = site_import_dir(site_code)
     with connect() as con:
         vehicle_count = con.execute("SELECT COUNT(*) AS cnt FROM vehicles WHERE site_code = ?", (site_code,)).fetchone()["cnt"]
         last_run = con.execute(
@@ -859,9 +1055,10 @@ def api_registry_status(request: Request):
         ).fetchone()
     return {
         "site_code": site_code,
+        "site_name": site_name_for_code(site_code),
         "vehicle_count": vehicle_count,
-        "import_dir": str(IMPORT_DIR),
-        "import_files": describe_excel_files(IMPORT_DIR),
+        "import_dir": str(source_dir),
+        "import_files": describe_excel_files(source_dir),
         "ocr_provider": os.getenv("PARKING_OCR_PROVIDER", "tesseract"),
         "ocr_learning": get_learning_status(site_code),
         "last_sync": dict(last_run) if last_run else None,
@@ -872,8 +1069,9 @@ def api_registry_status(request: Request):
 def api_registry_sync(request: Request):
     ensure_ready()
     require_role(request, {"admin"})
+    site_code = current_site_code(request)
     try:
-        return sync_registry_from_dir(IMPORT_DIR, current_site_code(request))
+        return sync_registry_from_dir(site_import_dir(site_code), site_code)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -884,6 +1082,8 @@ def api_registry_sync(request: Request):
 async def api_registry_upload(request: Request, files: list[UploadFile] = File(...)):
     ensure_ready()
     require_role(request, {"admin"})
+    site_code = current_site_code(request)
+    source_dir = site_import_dir(site_code)
 
     if not files:
         raise HTTPException(status_code=400, detail="업로드할 Excel 파일을 선택해 주세요.")
@@ -898,13 +1098,13 @@ async def api_registry_upload(request: Request, files: list[UploadFile] = File(.
     try:
         for filename, payload in pending:
             try:
-                uploaded = store_registry_upload(IMPORT_DIR, filename, payload, saved_names)
+                uploaded = store_registry_upload(source_dir, filename, payload, saved_names)
             except ValueError as exc:
                 display_name = Path(str(filename or "")).name or "이름 없는 파일"
                 raise ValueError(f"{display_name}: {exc}") from exc
             uploaded_paths.append(uploaded)
             saved_names.add(uploaded.name)
-        sync_result = sync_registry_from_dir(IMPORT_DIR, current_site_code(request))
+        sync_result = sync_registry_from_dir(source_dir, site_code)
     except ValueError as exc:
         for path in uploaded_paths:
             if path.exists():
@@ -924,7 +1124,7 @@ async def api_registry_upload(request: Request, files: list[UploadFile] = File(.
     return {
         "saved_count": len(uploaded_paths),
         "saved_files": [path.name for path in uploaded_paths],
-        "import_dir": str(IMPORT_DIR),
+        "import_dir": str(source_dir),
         "sync": sync_result,
     }
 
@@ -969,7 +1169,7 @@ async def api_enforcement_submit(
     require_role(request, ENFORCEMENT_WRITE_ROLES)
     site_code = current_site_code(request)
     check = build_check_response(site_code, plate)
-    photo_path = save_photo(photo) if photo else None
+    photo_path = save_photo(photo, site_code) if photo else None
     learned_candidates = parse_candidates_json(ocr_candidates)
 
     with connect() as con:

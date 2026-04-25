@@ -5,6 +5,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("PARKING_DB_PATH", str(BASE_DIR / "data" / "parking.db")))
 DEFAULT_SITE_CODE = (os.getenv("PARKING_DEFAULT_SITE_CODE", "APT1100").strip().upper() or "APT1100")
+DEFAULT_SITE_NAME = os.getenv("PARKING_DEFAULT_SITE_NAME", "기본 아파트").strip() or "기본 아파트"
 SEED_DEMO = os.getenv("PARKING_SEED_DEMO", "1").strip().lower() in {"1", "true", "yes", "on"}
 VALID_USER_ROLES = {
     "admin",
@@ -48,6 +49,57 @@ def connect() -> sqlite3.Connection:
 def table_columns(con: sqlite3.Connection, table_name: str) -> set[str]:
     rows = con.execute(f"PRAGMA table_info({table_name})").fetchall()
     return {row["name"] for row in rows}
+
+
+def table_info(con: sqlite3.Connection, table_name: str) -> list[sqlite3.Row]:
+    return con.execute(f"PRAGMA table_info({table_name})").fetchall()
+
+
+def create_user_indexes(con: sqlite3.Connection) -> None:
+    con.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_site_username
+        ON users(site_code, username)
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_users_site_role
+        ON users(site_code, role)
+        """
+    )
+
+
+def create_users_table(con: sqlite3.Connection, table_name: str = "users") -> None:
+    default_site = normalize_site_code(DEFAULT_SITE_CODE).replace("'", "''")
+    con.execute(
+        f"""
+        CREATE TABLE {table_name} (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_code TEXT NOT NULL DEFAULT '{default_site}',
+          username TEXT NOT NULL,
+          pw_hash TEXT NOT NULL,
+          role TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+
+
+def ensure_site_schema(con: sqlite3.Connection) -> None:
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sites (
+          site_code TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    con.execute(
+        "INSERT OR IGNORE INTO sites(site_code, name) VALUES (?, ?)",
+        (normalize_site_code(DEFAULT_SITE_CODE), DEFAULT_SITE_NAME),
+    )
 
 
 def create_cctv_request_indexes(con: sqlite3.Connection) -> None:
@@ -157,10 +209,36 @@ def ensure_cctv_request_schema(con: sqlite3.Connection) -> None:
 
 
 def ensure_user_role_schema(con: sqlite3.Connection) -> None:
-    columns = table_columns(con, "users")
-    if not columns:
+    info = table_info(con, "users")
+    if not info:
         return
+    columns = {row["name"] for row in info}
+    username_is_primary_key = any(row["name"] == "username" and int(row["pk"]) > 0 for row in info)
 
+    if "id" not in columns or "site_code" not in columns or username_is_primary_key:
+        con.execute("DROP TABLE IF EXISTS users_new")
+        create_users_table(con, "users_new")
+
+        site_expr = "COALESCE(NULLIF(site_code, ''), ?)" if "site_code" in columns else "?"
+        role_expr = "COALESCE(NULLIF(role, ''), 'cleaner')" if "role" in columns else "'cleaner'"
+        created_expr = "COALESCE(created_at, datetime('now'))" if "created_at" in columns else "datetime('now')"
+        con.execute(
+            f"""
+            INSERT OR IGNORE INTO users_new(site_code, username, pw_hash, role, created_at)
+            SELECT {site_expr}, username, pw_hash, {role_expr}, {created_expr}
+            FROM users
+            WHERE username IS NOT NULL AND username != ''
+            """,
+            (normalize_site_code(DEFAULT_SITE_CODE),),
+        )
+        con.execute("DROP TABLE users")
+        con.execute("ALTER TABLE users_new RENAME TO users")
+        columns = table_columns(con, "users")
+
+    con.execute(
+        "UPDATE users SET site_code = ? WHERE site_code IS NULL OR site_code = ''",
+        (normalize_site_code(DEFAULT_SITE_CODE),),
+    )
     con.execute("UPDATE users SET role = 'cleaner' WHERE role = 'viewer'")
     placeholders = ", ".join("?" for _ in VALID_USER_ROLES)
     con.execute(
@@ -171,6 +249,11 @@ def ensure_user_role_schema(con: sqlite3.Connection) -> None:
         """,
         tuple(sorted(VALID_USER_ROLES)),
     )
+    create_user_indexes(con)
+
+    for row in con.execute("SELECT DISTINCT site_code FROM users WHERE site_code IS NOT NULL AND site_code != ''").fetchall():
+        site_code = normalize_site_code(row["site_code"])
+        con.execute("INSERT OR IGNORE INTO sites(site_code, name) VALUES (?, ?)", (site_code, site_code))
 
 
 def init_db() -> None:
@@ -178,6 +261,7 @@ def init_db() -> None:
     schema_sql = schema_path.read_text(encoding="utf-8")
     with connect() as con:
         con.executescript(schema_sql)
+        ensure_site_schema(con)
         ensure_cctv_request_schema(con)
         ensure_user_role_schema(con)
         con.commit()
@@ -186,17 +270,19 @@ def init_db() -> None:
 def seed_users() -> None:
     from .auth import pbkdf2_hash
 
+    site_code = normalize_site_code(DEFAULT_SITE_CODE)
     demo_users = [
-        ("admin", pbkdf2_hash("admin1234"), "admin"),
-        ("guard", pbkdf2_hash("guard1234"), "guard"),
-        ("cleaner", pbkdf2_hash("cleaner1234"), "cleaner"),
+        (site_code, "admin", pbkdf2_hash("admin1234"), "admin"),
+        (site_code, "guard", pbkdf2_hash("guard1234"), "guard"),
+        (site_code, "cleaner", pbkdf2_hash("cleaner1234"), "cleaner"),
     ]
     with connect() as con:
-        existing = con.execute("SELECT COUNT(*) AS cnt FROM users").fetchone()
+        con.execute("INSERT OR IGNORE INTO sites(site_code, name) VALUES (?, ?)", (site_code, DEFAULT_SITE_NAME))
+        existing = con.execute("SELECT COUNT(*) AS cnt FROM users WHERE site_code = ?", (site_code,)).fetchone()
         if int(existing["cnt"]) > 0:
             return
         con.executemany(
-            "INSERT INTO users(username, pw_hash, role) VALUES (?, ?, ?)",
+            "INSERT INTO users(site_code, username, pw_hash, role) VALUES (?, ?, ?, ?)",
             demo_users,
         )
         con.commit()

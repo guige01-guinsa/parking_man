@@ -79,8 +79,16 @@ CREATE TABLE IF NOT EXISTS ocr_feedback (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS sites (
+  site_code TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS users (
-  username TEXT PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  site_code TEXT NOT NULL DEFAULT 'APT1100',
+  username TEXT NOT NULL,
   pw_hash TEXT NOT NULL,
   role TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -95,4 +103,4 @@ CREATE INDEX IF NOT EXISTS idx_ocr_feedback_site_created_at ON ocr_feedback(site
 CREATE INDEX IF NOT EXISTS idx_ocr_feedback_site_raw_key ON ocr_feedback(site_code, raw_key);
 CREATE INDEX IF NOT EXISTS idx_ocr_feedback_site_suggested ON ocr_feedback(site_code, suggested_plate);
 CREATE INDEX IF NOT EXISTS idx_ocr_feedback_site_corrected ON ocr_feedback(site_code, corrected_plate);
-
+CREATE INDEX IF NOT EXISTS idx_sites_created_at ON sites(created_at);
