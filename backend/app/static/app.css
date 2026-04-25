@@ -678,6 +678,63 @@ summary:focus-visible {
   color: white;
 }
 
+.contact-line {
+  display: grid;
+  gap: 6px;
+}
+
+.contact-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.contact-number {
+  color: var(--ink);
+  font-weight: 800;
+  word-break: break-all;
+}
+
+.contact-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.contact-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(15, 118, 110, 0.2);
+  border-radius: 999px;
+  color: var(--brand-deep);
+  background: rgba(15, 118, 110, 0.08);
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.contact-sms {
+  color: white;
+  border-color: transparent;
+  background: var(--brand);
+}
+
+.contact-actions-light .contact-number {
+  color: white;
+}
+
+.contact-actions-light .contact-action {
+  color: white;
+  border-color: rgba(255, 255, 255, 0.32);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.contact-actions-light .contact-sms {
+  background: rgba(255, 255, 255, 0.24);
+}
+
 .search-row input {
   flex: 1;
 }

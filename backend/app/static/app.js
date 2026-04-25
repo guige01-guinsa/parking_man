@@ -75,13 +75,56 @@ function phoneHref(value) {
   return raw.replace(/\D/g, "");
 }
 
-function phoneLinkMarkup(value, className = "contact-link") {
+function smsBodySeparator() {
+  const ua = navigator.userAgent || "";
+  const platform = navigator.platform || "";
+  const isAppleMobile = /iPad|iPhone|iPod/.test(ua) || (platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  return isAppleMobile ? "&" : "?";
+}
+
+function buildSmsBody(plateValue = "") {
+  const plate = String(plateValue || plateInput?.value || "").trim();
+  const location = locationInput?.value.trim();
+  const memo = memoInput?.value.trim();
+  const lines = ["[주차 안내]"];
+  if (plate) lines.push(`차량번호: ${plate}`);
+  if (location) lines.push(`위치: ${location}`);
+  if (memo) lines.push(`사유: ${memo}`);
+  lines.push("차량 이동 또는 확인 부탁드립니다.");
+  return lines.join("\n");
+}
+
+function smsHref(value, plateValue = "") {
+  const recipient = phoneHref(value);
+  if (!recipient) return "";
+  return `sms:${recipient}${smsBodySeparator()}body=${encodeURIComponent(buildSmsBody(plateValue))}`;
+}
+
+function contactActionsMarkup(value, plateValue = "", tone = "") {
   const label = String(value ?? "").trim();
   const href = phoneHref(label);
   if (!href) {
     return escapeHtml(label || "-");
   }
-  return `<a class="${escapeHtml(className)}" href="tel:${escapeHtml(href)}">${escapeHtml(label)}</a>`;
+  const toneClass = tone ? ` contact-actions-${tone}` : "";
+  return `
+    <span class="contact-actions${toneClass}">
+      <span class="contact-number">${escapeHtml(label)}</span>
+      <span class="contact-action-row">
+        <a class="contact-action" href="tel:${escapeHtml(href)}">전화</a>
+        <a class="contact-action contact-sms" href="${escapeHtml(smsHref(label, plateValue))}" data-sms-phone="${escapeHtml(label)}" data-sms-plate="${escapeHtml(plateValue || "")}">문자</a>
+      </span>
+    </span>
+  `;
+}
+
+function refreshSmsLinks(root = document) {
+  root.querySelectorAll("[data-sms-phone]").forEach((link) => {
+    const href = smsHref(link.dataset.smsPhone || "", link.dataset.smsPlate || "");
+    if (href) {
+      link.setAttribute("href", href);
+    }
+  });
 }
 
 function verdictClass(verdict) {
@@ -125,6 +168,7 @@ function syncQuickMemoState() {
   quickMemoButtons.forEach((button) => {
     button.classList.toggle("is-active", button.dataset.memo === current);
   });
+  refreshSmsLinks();
 }
 
 function updatePreview(file) {
@@ -213,7 +257,7 @@ function renderVerdict(data) {
     { label: "상태", value: data.status || "-" },
     { label: "동호수", value: data.unit || "-" },
     { label: "차주", value: data.owner_name || "-" },
-    { label: "연락처", html: phoneLinkMarkup(data.phone, "contact-link contact-link-light") },
+    { label: "연락처", html: contactActionsMarkup(data.phone, data.plate, "light") },
     { label: "시작일", value: data.valid_from || "-" },
     { label: "만료일", value: data.valid_to || "-" },
   ];
@@ -230,6 +274,7 @@ function renderVerdict(data) {
   }
 
   renderMatchNavigator(data);
+  refreshSmsLinks(verdictMeta);
 }
 
 function applyCheckResponse(data) {
@@ -314,12 +359,13 @@ function renderSearchResults(rows) {
           <span class="result-badge ${badgeClass((row.status || "active").toUpperCase() === "BLOCKED" ? "BLOCKED" : (row.status || "active") === "temp" ? "TEMP" : "OK")}">${escapeHtml(row.status || "active")}</span>
         </div>
         <div>${escapeHtml(row.owner_name || "-")} / ${escapeHtml(row.unit || "-")}</div>
-        <div class="subtle">연락처 ${phoneLinkMarkup(row.phone)}</div>
+        <div class="subtle contact-line"><span>연락처</span>${contactActionsMarkup(row.phone, row.plate)}</div>
         <div class="subtle">${escapeHtml(row.note || "비고 없음")}</div>
       </article>
     `)
     .join("");
   attachResultClickHandlers(searchResults);
+  refreshSmsLinks(searchResults);
 }
 
 function renderRecent(rows) {
@@ -730,8 +776,12 @@ plateInput?.addEventListener("keydown", (event) => {
   }
 });
 
+plateInput?.addEventListener("input", () => refreshSmsLinks());
 inspectorInput?.addEventListener("input", () => persistField("inspector", inspectorInput.value.trim()));
-locationInput?.addEventListener("input", () => persistField("location", locationInput.value.trim()));
+locationInput?.addEventListener("input", () => {
+  persistField("location", locationInput.value.trim());
+  refreshSmsLinks();
+});
 memoInput?.addEventListener("input", syncQuickMemoState);
 
 quickMemoButtons.forEach((button) => {
