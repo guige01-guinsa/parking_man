@@ -4,6 +4,8 @@ CREATE TABLE IF NOT EXISTS vehicles (
   site_code TEXT NOT NULL,
   plate TEXT NOT NULL,
   unit TEXT,
+  building TEXT,
+  unit_number TEXT,
   owner_name TEXT,
   phone TEXT,
   status TEXT NOT NULL DEFAULT 'active',

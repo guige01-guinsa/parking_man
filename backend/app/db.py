@@ -330,11 +330,22 @@ def ensure_user_role_schema(con: sqlite3.Connection) -> None:
         con.execute("INSERT OR IGNORE INTO sites(site_code, name) VALUES (?, ?)", (site_code, site_code))
 
 
+def ensure_vehicle_schema(con: sqlite3.Connection) -> None:
+    columns = table_columns(con, "vehicles")
+    if not columns:
+        return
+    if "building" not in columns:
+        con.execute("ALTER TABLE vehicles ADD COLUMN building TEXT")
+    if "unit_number" not in columns:
+        con.execute("ALTER TABLE vehicles ADD COLUMN unit_number TEXT")
+
+
 def init_db() -> None:
     schema_path = BASE_DIR / "schema.sql"
     schema_sql = schema_path.read_text(encoding="utf-8")
     with connect() as con:
         con.executescript(schema_sql)
+        ensure_vehicle_schema(con)
         ensure_site_schema(con)
         ensure_billing_schema(con)
         ensure_cctv_request_schema(con)
@@ -370,9 +381,9 @@ def maybe_seed_demo() -> None:
 
     site_code = normalize_site_code(DEFAULT_SITE_CODE)
     demo_rows = [
-        (site_code, "12가3456", "101-1203", "홍길동", "010-1111-2222", "active", "2026-01-01", "2027-12-31", "상시 등록", "demo.xlsx", "vehicles"),
-        (site_code, "34나5678", "102-803", "김영희", "010-2222-3333", "blocked", None, None, "관리소 차단 차량", "demo.xlsx", "vehicles"),
-        (site_code, "123다4567", "103-1502", "이철수", "010-3333-4444", "temp", "2026-04-01", "2026-04-30", "임시 등록", "demo.xlsx", "vehicles"),
+        (site_code, "12가3456", "101-1203", "101", "1203", "홍길동", "010-1111-2222", "active", "2026-01-01", "2027-12-31", "상시 등록", "demo.xlsx", "vehicles"),
+        (site_code, "34나5678", "102-803", "102", "803", "김영희", "010-2222-3333", "blocked", None, None, "관리소 차단 차량", "demo.xlsx", "vehicles"),
+        (site_code, "123다4567", "103-1502", "103", "1502", "이철수", "010-3333-4444", "temp", "2026-04-01", "2026-04-30", "임시 등록", "demo.xlsx", "vehicles"),
     ]
     with connect() as con:
         exists = con.execute("SELECT COUNT(*) AS cnt FROM vehicles WHERE site_code = ?", (site_code,)).fetchone()
@@ -381,8 +392,8 @@ def maybe_seed_demo() -> None:
         con.executemany(
             """
             INSERT OR IGNORE INTO vehicles
-            (site_code, plate, unit, owner_name, phone, status, valid_from, valid_to, note, source_file, source_sheet)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (site_code, plate, unit, building, unit_number, owner_name, phone, status, valid_from, valid_to, note, source_file, source_sheet)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             demo_rows,
         )

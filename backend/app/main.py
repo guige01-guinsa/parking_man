@@ -72,6 +72,8 @@ class CheckMatch(BaseModel):
     verdict: str
     message: str
     unit: str | None = None
+    building: str | None = None
+    unit_number: str | None = None
     owner_name: str | None = None
     phone: str | None = None
     status: str | None = None
@@ -742,6 +744,8 @@ def build_check_match(plate: str, vehicle: dict[str, Any] | None) -> CheckMatch:
         verdict=verdict.verdict,
         message=verdict.message,
         unit=verdict.unit,
+        building=(vehicle or {}).get("building"),
+        unit_number=(vehicle or {}).get("unit_number"),
         owner_name=verdict.owner_name,
         phone=(vehicle or {}).get("phone"),
         status=verdict.status,
@@ -1648,18 +1652,20 @@ def api_registry_search(request: Request, q: str = "", limit: int = 20):
     with connect() as con:
         rows = con.execute(
             """
-            SELECT plate, unit, owner_name, phone, status, valid_from, valid_to, note, source_file, source_sheet
+            SELECT plate, unit, building, unit_number, owner_name, phone, status, valid_from, valid_to, note, source_file, source_sheet
             FROM vehicles
             WHERE site_code = ?
               AND (
                 plate LIKE ?
                 OR COALESCE(unit, '') LIKE ?
+                OR COALESCE(building, '') LIKE ?
+                OR COALESCE(unit_number, '') LIKE ?
                 OR COALESCE(owner_name, '') LIKE ?
               )
             ORDER BY updated_at DESC, plate
             LIMIT ?
             """,
-            (site_code, like, like, like, limit),
+            (site_code, like, like, like, like, like, limit),
         ).fetchall()
     return [dict(row) for row in rows]
 

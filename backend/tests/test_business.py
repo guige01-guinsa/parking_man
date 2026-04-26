@@ -4,10 +4,12 @@ from datetime import date
 from pathlib import Path
 
 from app.excel_import import (
+    build_record,
     build_safe_excel_filename,
     is_temporary_excel_filename,
     list_excel_files,
     resolve_header_field,
+    split_unit_text,
     store_registry_upload,
 )
 from app.plates import evaluate_vehicle_row, extract_plate_candidates, normalize_plate, normalize_status
@@ -48,7 +50,26 @@ class ExcelHeaderTests(unittest.TestCase):
     def test_resolve_korean_headers(self):
         self.assertEqual(resolve_header_field("차량번호"), "plate")
         self.assertEqual(resolve_header_field("동호수"), "unit")
+        self.assertEqual(resolve_header_field("동"), "building")
+        self.assertEqual(resolve_header_field("호수"), "unit_number")
         self.assertEqual(resolve_header_field("차주"), "owner_name")
+
+    def test_splits_combined_unit_text(self):
+        self.assertEqual(split_unit_text("101동 1203호"), ("101", "1203"))
+        self.assertEqual(split_unit_text("102-803"), ("102", "803"))
+
+    def test_build_record_keeps_building_and_unit_number(self):
+        record = build_record(
+            ("12가3456", "101", "1203", "홍길동"),
+            {"plate": 0, "building": 1, "unit_number": 2, "owner_name": 3},
+            "registry.xlsx",
+            "Sheet1",
+        )
+
+        self.assertIsNotNone(record)
+        self.assertEqual(record.unit, "101-1203")
+        self.assertEqual(record.building, "101")
+        self.assertEqual(record.unit_number, "1203")
 
     def test_build_safe_excel_filename(self):
         self.assertEqual(build_safe_excel_filename("../차량 목록.xlsx"), "차량-목록.xlsx")

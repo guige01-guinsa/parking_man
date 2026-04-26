@@ -20,7 +20,9 @@ def is_temporary_excel_filename(filename: str | os.PathLike[str] | None) -> bool
 
 FIELD_ALIASES = {
     "plate": {"plate", "carnumber", "platenumber", "차량번호", "번호판", "차번호", "등록번호"},
-    "unit": {"unit", "household", "aptunit", "세대", "세대번호", "동호", "동호수", "동호실", "호수"},
+    "unit": {"unit", "household", "aptunit", "세대", "세대번호", "동호", "동호수", "동호실"},
+    "building": {"building", "buildingno", "dong", "동", "동수"},
+    "unit_number": {"unitnumber", "room", "roomnumber", "ho", "호", "호수"},
     "owner_name": {"owner", "resident", "name", "차주", "입주자", "성명", "이름"},
     "phone": {"phone", "mobile", "tel", "연락처", "전화번호", "휴대폰"},
     "status": {"status", "state", "kind", "상태", "구분", "등록상태"},
@@ -34,6 +36,8 @@ FIELD_ALIASES = {
 class RegistryRecord:
     plate: str
     unit: str | None
+    building: str | None
+    unit_number: str | None
     owner_name: str | None
     phone: str | None
     status: str
@@ -62,6 +66,53 @@ def resolve_header_field(value: Any) -> str | None:
 def normalize_cell_text(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
+
+
+def normalize_building_text(value: Any) -> str | None:
+    text = normalize_cell_text(value)
+    if not text:
+        return None
+    text = re.sub(r"\s+", "", text)
+    text = re.sub(r"(동|building)$", "", text, flags=re.IGNORECASE)
+    return text or None
+
+
+def normalize_unit_number_text(value: Any) -> str | None:
+    text = normalize_cell_text(value)
+    if not text:
+        return None
+    text = re.sub(r"\s+", "", text)
+    text = re.sub(r"(호|room)$", "", text, flags=re.IGNORECASE)
+    return text or None
+
+
+def split_unit_text(value: Any) -> tuple[str | None, str | None]:
+    text = normalize_cell_text(value)
+    if not text:
+        return None, None
+    compact = re.sub(r"\s+", "", text)
+    match = re.search(r"(?P<building>[A-Za-z0-9가-힣]+)동[-_/ ]?(?P<unit>[A-Za-z0-9가-힣]+)호?", compact)
+    if match:
+        return normalize_building_text(match.group("building")), normalize_unit_number_text(match.group("unit"))
+    match = re.search(r"(?P<building>\d{1,4})[-_/ ](?P<unit>\d{1,5})", text.strip())
+    if match:
+        return normalize_building_text(match.group("building")), normalize_unit_number_text(match.group("unit"))
+    parts = re.split(r"[\s,/]+", text.strip())
+    if len(parts) >= 2 and re.fullmatch(r"\d{1,4}", parts[0]) and re.fullmatch(r"\d{1,5}", parts[1]):
+        return normalize_building_text(parts[0]), normalize_unit_number_text(parts[1])
+    return None, None
+
+
+def combine_unit(building: str | None, unit_number: str | None, fallback: str | None) -> str | None:
+    if building and unit_number:
+        return f"{building}-{unit_number}"
+    if fallback:
+        return fallback
+    if building:
+        return f"{building}동"
+    if unit_number:
+        return f"{unit_number}호"
+    return None
 
 
 def normalize_date(value: Any) -> str | None:
@@ -97,9 +148,15 @@ def build_record(row: tuple[Any, ...], mapping: dict[str, int], source_file: str
     plate = normalize_plate(row[mapping["plate"]] if mapping["plate"] < len(row) else None)
     if not plate:
         return None
+    unit_raw = normalize_cell_text(row[mapping["unit"]]) if "unit" in mapping and mapping["unit"] < len(row) else None
+    split_building, split_unit_number = split_unit_text(unit_raw)
+    building = normalize_building_text(row[mapping["building"]]) if "building" in mapping and mapping["building"] < len(row) else split_building
+    unit_number = normalize_unit_number_text(row[mapping["unit_number"]]) if "unit_number" in mapping and mapping["unit_number"] < len(row) else split_unit_number
     return RegistryRecord(
         plate=plate,
-        unit=normalize_cell_text(row[mapping["unit"]]) if "unit" in mapping and mapping["unit"] < len(row) else None,
+        unit=combine_unit(building, unit_number, unit_raw),
+        building=building,
+        unit_number=unit_number,
         owner_name=normalize_cell_text(row[mapping["owner_name"]]) if "owner_name" in mapping and mapping["owner_name"] < len(row) else None,
         phone=normalize_cell_text(row[mapping["phone"]]) if "phone" in mapping and mapping["phone"] < len(row) else None,
         status=normalize_status(row[mapping["status"]]) if "status" in mapping and mapping["status"] < len(row) else "active",
@@ -230,14 +287,16 @@ def sync_registry_from_dir(source_dir: str | os.PathLike[str], site_code: str | 
         con.executemany(
             """
             INSERT INTO vehicles
-            (site_code, plate, unit, owner_name, phone, status, valid_from, valid_to, note, source_file, source_sheet, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            (site_code, plate, unit, building, unit_number, owner_name, phone, status, valid_from, valid_to, note, source_file, source_sheet, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
             """,
             [
                 (
                     resolved_site_code,
                     record.plate,
                     record.unit,
+                    record.building,
+                    record.unit_number,
                     record.owner_name,
                     record.phone,
                     record.status,

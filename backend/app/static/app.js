@@ -447,6 +447,8 @@ function renderVerdict(data) {
   const meta = [
     { label: "차량번호", value: data.plate || "-" },
     { label: "상태", value: data.status || "-" },
+    { label: "동", value: data.building || "-" },
+    { label: "호수", value: data.unit_number || "-" },
     { label: "동호수", value: data.unit || "-" },
     { label: "차주", value: data.owner_name || "-" },
     { label: "연락처", html: contactActionsMarkup(data.phone, data.plate, "light") },
@@ -550,7 +552,7 @@ function renderSearchResults(rows) {
           <button type="button" class="result-title pick-button" data-plate-pick="${escapeHtml(row.plate)}">${escapeHtml(row.plate)}</button>
           <span class="result-badge ${badgeClass((row.status || "active").toUpperCase() === "BLOCKED" ? "BLOCKED" : (row.status || "active") === "temp" ? "TEMP" : "OK")}">${escapeHtml(row.status || "active")}</span>
         </div>
-        <div>${escapeHtml(row.owner_name || "-")} / ${escapeHtml(row.unit || "-")}</div>
+        <div>${escapeHtml(row.owner_name || "-")} / ${escapeHtml(row.building || "-")}동 ${escapeHtml(row.unit_number || "-")}호</div>
         <div class="subtle contact-line"><span>연락처</span>${contactActionsMarkup(row.phone, row.plate)}</div>
         <div class="subtle">${escapeHtml(row.note || "비고 없음")}</div>
       </article>
