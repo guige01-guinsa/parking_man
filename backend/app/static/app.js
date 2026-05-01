@@ -48,6 +48,7 @@ const vehicleBackupList = document.getElementById("vehicle-backup-list");
 const vehicleList = document.getElementById("vehicle-list");
 const capturePlaceholderInput = document.getElementById("capture-placeholder-input");
 const uploadCapturePlaceholderBtn = document.getElementById("upload-capture-placeholder-btn");
+const deleteCapturePlaceholderBtn = document.getElementById("delete-capture-placeholder-btn");
 const capturePlaceholderNote = document.getElementById("capture-placeholder-note");
 const userList = document.getElementById("user-list");
 const userCreateForm = document.getElementById("user-create-form");
@@ -1804,6 +1805,20 @@ async function uploadCapturePlaceholderImage() {
   setStatus("촬영 초기화면 이미지 저장 완료", "success");
 }
 
+async function deleteCapturePlaceholderImage() {
+  if (!confirm("촬영 초기화면 이미지를 삭제하고 기본 화면으로 되돌릴까요?")) {
+    return;
+  }
+  setStatus("촬영 초기화면 이미지 삭제 중", "active");
+  const settings = await fetchJson(apiUrl("/api/site/settings/capture-placeholder"), { method: "DELETE" });
+  if (capturePlaceholderInput) capturePlaceholderInput.value = "";
+  setCapturePlaceholderImage(settings.capture_placeholder_image_url || "");
+  if (capturePlaceholderNote) {
+    capturePlaceholderNote.textContent = "촬영 초기화면 이미지를 삭제했습니다. 현재 기본 화면을 사용 중입니다.";
+  }
+  setStatus("촬영 초기화면 이미지 삭제 완료", "success");
+}
+
 async function loadCctvAssignees() {
   if (!currentCanAssignCctv) return;
   cctvAssignees = await fetchJson(apiUrl("/api/cctv/assignees"));
@@ -2192,6 +2207,7 @@ vehicleQueryInput?.addEventListener("keydown", (event) => {
   }
 });
 uploadCapturePlaceholderBtn?.addEventListener("click", () => uploadCapturePlaceholderImage().catch((error) => alert(error.message)));
+deleteCapturePlaceholderBtn?.addEventListener("click", () => deleteCapturePlaceholderImage().catch((error) => alert(error.message)));
 userRefreshBtn?.addEventListener("click", () => loadUsers().catch((error) => alert(error.message)));
 siteRefreshBtn?.addEventListener("click", () => loadSites().catch((error) => alert(error.message)));
 billingRefreshBtn?.addEventListener("click", () => loadBillingStatus().catch((error) => alert(error.message)));

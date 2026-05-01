@@ -2172,6 +2172,26 @@ async def api_site_settings_capture_placeholder(request: Request, image: UploadF
     return site_settings_dict(site_code)
 
 
+@app.delete("/api/site/settings/capture-placeholder")
+def api_site_settings_capture_placeholder_delete(request: Request):
+    ensure_ready()
+    require_role(request, {"admin"})
+    site_code = current_site_code(request)
+    with connect() as con:
+        con.execute(
+            """
+            INSERT INTO site_settings(site_code, capture_placeholder_image_url, updated_at)
+            VALUES (?, NULL, datetime('now'))
+            ON CONFLICT(site_code) DO UPDATE SET
+              capture_placeholder_image_url = NULL,
+              updated_at = datetime('now')
+            """,
+            (site_code,),
+        )
+        con.commit()
+    return site_settings_dict(site_code)
+
+
 @app.post("/api/ocr/scan")
 async def api_ocr_scan(request: Request, photo: UploadFile = File(...), manual_plate: str | None = Form(None)):
     ensure_ready()
