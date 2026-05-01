@@ -168,3 +168,19 @@
 - Render의 Persistent Disk는 유료 웹서비스에서만 사용할 수 있으므로 `render.yaml`은 `starter` 플랜 기준으로 작성했습니다.
 - 서비스 생성 후 `Shell` 또는 파일 업로드 기능으로 Excel 원본을 `/data/imports` 아래에 넣어야 등록차량 동기화가 가능합니다.
 - 현재는 Render Shell 없이도 관리자 화면에서 Excel을 업로드하면 `/data/imports`로 저장 후 즉시 동기화됩니다.
+- 배포 후에는 `tools/check_render_parking.ps1`로 실제 `parking-man` 서비스, live 커밋, `/health`, 로그인 화면, 개인정보 처리방침, 보안 헤더를 함께 확인합니다.
+- 로컬 환경변수 `RENDER_SERVICE_ID`가 다른 Render 서비스 ID를 가리킬 수 있으므로, 배포 점검은 서비스 이름 `parking-man`과 저장소 `parking_man`으로 서비스를 다시 찾아 검증합니다.
+- 실제 운영 디스크 크기를 변경했다면 Render 대시보드의 Persistent Disk 크기와 `render.yaml`의 `sizeGB` 값도 함께 맞춰 두세요.
+
+Render 배포 점검:
+
+```powershell
+$env:RENDER_API_KEY = "Render API Key"
+powershell -ExecutionPolicy Bypass -File .\tools\check_render_parking.ps1
+```
+
+Render API로 새 배포까지 실행하고 점검:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\check_render_parking.ps1 -Deploy
+```
