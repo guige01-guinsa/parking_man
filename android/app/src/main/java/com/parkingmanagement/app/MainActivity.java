@@ -61,7 +61,7 @@ public class MainActivity extends Activity implements PurchasesUpdatedListener {
 
     private void configureWebView() {
         CookieManager.getInstance().setAcceptCookie(true);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
+        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false);
 
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);

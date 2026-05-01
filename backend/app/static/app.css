@@ -239,6 +239,41 @@ th {
   background: linear-gradient(135deg, rgba(15, 118, 110, 0.08), rgba(255, 255, 255, 0.92));
 }
 
+.auth-start-guide {
+  padding: 16px 18px;
+  border-radius: 20px;
+  border: 1px solid rgba(15, 118, 110, 0.14);
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.auth-start-guide > strong {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.auth-start-guide ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.auth-start-guide li {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.auth-start-guide li span {
+  color: var(--brand-deep);
+  font-size: 13px;
+  font-weight: 900;
+}
+
 .auth-alert {
   margin-bottom: 18px;
   border-color: rgba(191, 54, 64, 0.18);
@@ -394,6 +429,40 @@ summary:focus-visible {
   justify-content: center;
   width: 100%;
   text-decoration: none;
+}
+
+.auth-help a {
+  color: var(--brand-deep);
+  font-weight: 800;
+}
+
+.privacy-shell {
+  place-items: start center;
+}
+
+.privacy-card {
+  width: min(860px, 100%);
+}
+
+.privacy-section {
+  padding: 16px 0;
+  border-top: 1px solid var(--line);
+}
+
+.privacy-section h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+
+.privacy-section p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.privacy-actions {
+  padding-top: 18px;
 }
 
 .topbar,
@@ -1527,6 +1596,16 @@ summary:focus-visible {
 
   .auth-card {
     padding: 22px 18px;
+  }
+
+  .auth-start-guide li {
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 8px;
+    font-size: 13px;
+  }
+
+  .auth-start-guide li span {
+    font-size: 12px;
   }
 
   .app-body.mobile-tabs-ready .hero-card {

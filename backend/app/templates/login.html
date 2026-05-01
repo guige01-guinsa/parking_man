@@ -36,6 +36,15 @@
           <strong>운영 안내</strong>
           <p>계정 발급과 비밀번호 재설정은 관리자 권한에서 처리합니다. 공용 기기에서는 작업 후 반드시 로그아웃해 주세요.</p>
         </div>
+
+        <div class="auth-start-guide" aria-label="처음 사용 안내">
+          <strong>처음 사용하는 순서</strong>
+          <ol>
+            <li><span>관리자</span>로그인 후 관리 화면에서 등록차량 Excel을 동기화하고 사용자 계정을 만듭니다.</li>
+            <li><span>권한 부여</span>차량DB를 조회하거나 수정할 담당자는 사용자 관리에서 DB 접근 권한을 켭니다.</li>
+            <li><span>현장 사용</span>번호판 촬영 또는 직접 조회로 차량을 확인한 뒤 위치와 메모를 저장합니다.</li>
+          </ol>
+        </div>
       </article>
 
       <section class="auth-card auth-panel">
@@ -71,6 +80,7 @@
         <div class="auth-help">
           <p>아이디는 발급받은 운영 계정을 사용해 주세요.</p>
           <p>로그인이 되지 않으면 입력 정보를 다시 확인한 뒤 관리자에게 문의해 주세요.</p>
+          <p><a href="{{ request.url_for('privacy_page') }}">개인정보 처리방침 및 데이터 삭제 안내</a></p>
           {% if support_kakao_url %}
           <div class="auth-support-actions">
             <a href="{{ support_kakao_url }}" class="secondary-btn auth-link-btn" target="_blank" rel="noopener noreferrer">{{ support_kakao_label }}</a>

@@ -5,8 +5,8 @@ from io import BytesIO
 import json
 import os
 import re
-import shutil
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,7 +22,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from pydantic import BaseModel, Field
 
-from .auth import COOKIE_NAME, make_session, pbkdf2_hash, pbkdf2_verify, read_session, require_role
+from .auth import COOKIE_NAME, SESSION_MAX_AGE, make_session, pbkdf2_hash, pbkdf2_verify, read_session, require_role
 from .db import DEFAULT_SITE_CODE, DEFAULT_SITE_NAME, connect, init_db, maybe_seed_demo, normalize_site_code, seed_users
 from .excel_import import describe_excel_files, store_registry_upload, sync_registry_from_dir
 from .ocr_learning import get_learning_candidates, get_learning_status, parse_candidates_json, record_ocr_feedback
@@ -36,8 +36,12 @@ IMPORT_DIR = Path(os.getenv("PARKING_IMPORT_DIR", str(BASE_DIR.parent / "imports
 APP_TITLE = os.getenv("PARKING_APP_TITLE", "아파트 주차단속 시스템")
 ROOT_PATH = os.getenv("PARKING_ROOT_PATH", "").strip()
 LOCAL_LOGIN_ENABLED = os.getenv("PARKING_LOCAL_LOGIN_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+SESSION_COOKIE_SECURE = os.getenv("PARKING_SESSION_COOKIE_SECURE", "auto").strip().lower()
+LOGIN_MAX_FAILED = int(os.getenv("PARKING_LOGIN_MAX_FAILED", "6"))
+LOGIN_LOCK_SECONDS = int(os.getenv("PARKING_LOGIN_LOCK_SECONDS", "300"))
 SUPPORT_KAKAO_URL = os.getenv("PARKING_SUPPORT_KAKAO_URL", "").strip()
 SUPPORT_KAKAO_LABEL = os.getenv("PARKING_SUPPORT_KAKAO_LABEL", "카카오톡 문의").strip() or "카카오톡 문의"
+PRIVACY_CONTACT_EMAIL = os.getenv("PARKING_PRIVACY_CONTACT_EMAIL", "guige01@gmail.com").strip()
 BILLING_PROVIDER = os.getenv("PARKING_BILLING_PROVIDER", "manual").strip().lower() or "manual"
 BILLING_ENFORCEMENT_ENABLED = os.getenv("PARKING_BILLING_ENFORCEMENT_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 SALES_CONTACT_URL = os.getenv("PARKING_SALES_CONTACT_URL", "").strip()
@@ -58,6 +62,9 @@ ROOT_PATH = ROOT_PATH.rstrip("/")
 
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 IMPORT_DIR.mkdir(parents=True, exist_ok=True)
+ALLOWED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+MAX_PHOTO_UPLOAD_BYTES = int(os.getenv("PARKING_MAX_PHOTO_UPLOAD_BYTES", str(10 * 1024 * 1024)))
+MAX_SETTING_IMAGE_BYTES = int(os.getenv("PARKING_MAX_SETTING_IMAGE_BYTES", str(5 * 1024 * 1024)))
 
 app = FastAPI(title=APP_TITLE, version="2.0.0", root_path=ROOT_PATH)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -66,9 +73,12 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 _ready_lock = threading.Lock()
 _app_ready = False
+_login_attempt_lock = threading.Lock()
+_login_attempts: dict[str, list[float]] = {}
 LOGIN_INVALID_MESSAGE = "로그인에 실패했습니다. 아이디와 비밀번호를 다시 확인해 주세요."
 LOGIN_FORMAT_MESSAGE = "아이디 형식을 다시 확인해 주세요. 영문 소문자와 숫자를 사용해 입력할 수 있습니다."
 LOGIN_SITE_FORMAT_MESSAGE = "아파트 코드는 영문, 숫자, 하이픈(-), 밑줄(_)만 사용해 2~32자로 입력해 주세요."
+LOGIN_LOCK_MESSAGE = "로그인 실패가 반복되어 잠시 제한되었습니다. 5분 뒤 다시 시도해 주세요."
 
 
 class CheckMatch(BaseModel):
@@ -238,6 +248,18 @@ BILLING_STATUS_LABELS = {
 }
 
 
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(self), geolocation=(self), microphone=()")
+    if is_secure_request(request):
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
+
+
 def app_url(path: str) -> str:
     if not path.startswith("/"):
         path = f"/{path}"
@@ -251,6 +273,55 @@ def role_order_case(column: str = "role") -> str:
 
 def session_cookie_path() -> str:
     return ROOT_PATH or "/"
+
+
+def is_secure_request(request: Request) -> bool:
+    forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    return request.url.scheme == "https" or forwarded_proto == "https"
+
+
+def should_use_secure_cookie(request: Request) -> bool:
+    if SESSION_COOKIE_SECURE in {"1", "true", "yes", "on"}:
+        return True
+    if SESSION_COOKIE_SECURE in {"0", "false", "no", "off"}:
+        return False
+    return is_secure_request(request)
+
+
+def login_attempt_key(request: Request, site_code: str, username: str) -> str:
+    forwarded_for = str(request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    client_host = forwarded_for or (request.client.host if request.client else "unknown")
+    return f"{client_host}:{normalize_site_code(site_code)}:{username}"
+
+
+def is_login_limited(key: str) -> bool:
+    if LOGIN_MAX_FAILED <= 0:
+        return False
+    now = time.time()
+    cutoff = now - LOGIN_LOCK_SECONDS
+    with _login_attempt_lock:
+        recent = [stamp for stamp in _login_attempts.get(key, []) if stamp >= cutoff]
+        if recent:
+            _login_attempts[key] = recent
+        else:
+            _login_attempts.pop(key, None)
+        return len(recent) >= LOGIN_MAX_FAILED
+
+
+def record_login_failure(key: str) -> None:
+    if LOGIN_MAX_FAILED <= 0:
+        return
+    now = time.time()
+    cutoff = now - LOGIN_LOCK_SECONDS
+    with _login_attempt_lock:
+        recent = [stamp for stamp in _login_attempts.get(key, []) if stamp >= cutoff]
+        recent.append(now)
+        _login_attempts[key] = recent[-LOGIN_MAX_FAILED:]
+
+
+def clear_login_failures(key: str) -> None:
+    with _login_attempt_lock:
+        _login_attempts.pop(key, None)
 
 
 def render_login_page(
@@ -271,6 +342,7 @@ def render_login_page(
             "login_error": error,
             "support_kakao_url": SUPPORT_KAKAO_URL,
             "support_kakao_label": SUPPORT_KAKAO_LABEL,
+            "privacy_contact_email": PRIVACY_CONTACT_EMAIL,
         },
         status_code=status_code,
     )
@@ -1220,14 +1292,8 @@ def ensure_not_last_admin(con, site_code: str, username: str, *, next_role: str 
 def save_photo(photo: UploadFile, site_code: str) -> str | None:
     if not photo.filename:
         return None
-    target_dir = site_upload_dir(site_code)
-    target_dir.mkdir(parents=True, exist_ok=True)
-    suffix = Path(photo.filename).suffix.lower() or ".jpg"
-    name = f"{uuid.uuid4().hex}{suffix}"
-    file_path = target_dir / name
-    with file_path.open("wb") as target:
-        shutil.copyfileobj(photo.file, target)
-    return site_upload_url(site_code, name)
+    payload = photo.file.read()
+    return save_photo_bytes(photo.filename, payload, site_code)
 
 
 def save_photo_bytes(filename: str | None, payload: bytes, site_code: str) -> str:
@@ -1235,9 +1301,13 @@ def save_photo_bytes(filename: str | None, payload: bytes, site_code: str) -> st
         raise HTTPException(status_code=400, detail="사진 파일을 선택해 주세요.")
     if not payload:
         raise HTTPException(status_code=400, detail="사진 파일이 비어 있습니다.")
+    if len(payload) > MAX_PHOTO_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="사진 파일은 10MB 이하만 업로드할 수 있습니다.")
     target_dir = site_upload_dir(site_code)
     target_dir.mkdir(parents=True, exist_ok=True)
     suffix = Path(filename).suffix.lower() or ".jpg"
+    if suffix not in ALLOWED_IMAGE_SUFFIXES:
+        raise HTTPException(status_code=400, detail="사진은 jpg, png, webp, gif 형식만 사용할 수 있습니다.")
     name = f"{uuid.uuid4().hex}{suffix}"
     (target_dir / name).write_bytes(payload)
     return site_upload_url(site_code, name)
@@ -1248,8 +1318,10 @@ def save_site_setting_image(filename: str | None, payload: bytes, site_code: str
         raise HTTPException(status_code=400, detail="이미지 파일을 선택해 주세요.")
     if not payload:
         raise HTTPException(status_code=400, detail="이미지 파일이 비어 있습니다.")
+    if len(payload) > MAX_SETTING_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="초기화면 이미지는 5MB 이하만 업로드할 수 있습니다.")
     suffix = Path(filename).suffix.lower() or ".jpg"
-    if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+    if suffix not in ALLOWED_IMAGE_SUFFIXES:
         raise HTTPException(status_code=400, detail="이미지는 jpg, png, webp, gif 형식만 사용할 수 있습니다.")
     target_dir = site_upload_dir(site_code) / "settings"
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -1369,6 +1441,18 @@ def login_page(request: Request):
     return render_login_page(request, site_code=DEFAULT_SITE_CODE)
 
 
+@app.get("/privacy", response_class=HTMLResponse)
+def privacy_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="privacy.html",
+        context={
+            "app_title": APP_TITLE,
+            "privacy_contact_email": PRIVACY_CONTACT_EMAIL,
+        },
+    )
+
+
 @app.post("/login")
 def login_submit(
     request: Request,
@@ -1401,12 +1485,22 @@ def login_submit(
             site_code=user_site_code,
             error=LOGIN_FORMAT_MESSAGE,
         )
+    attempt_key = login_attempt_key(request, user_site_code, user_name)
+    if is_login_limited(attempt_key):
+        return render_login_page(
+            request,
+            status_code=429,
+            username=user_name,
+            site_code=user_site_code,
+            error=LOGIN_LOCK_MESSAGE,
+        )
     with connect() as con:
         row = con.execute(
             "SELECT * FROM users WHERE site_code = ? AND username = ?",
             (user_site_code, user_name),
         ).fetchone()
     if not row or not pbkdf2_verify(password, row["pw_hash"]):
+        record_login_failure(attempt_key)
         return render_login_page(
             request,
             status_code=401,
@@ -1415,6 +1509,7 @@ def login_submit(
             error=LOGIN_INVALID_MESSAGE,
         )
 
+    clear_login_failures(attempt_key)
     token = make_session(user_name, row["role"], user_site_code)
     response = RedirectResponse(url=app_url("/field"), status_code=302)
     response.set_cookie(
@@ -1422,15 +1517,17 @@ def login_submit(
         token,
         httponly=True,
         samesite="lax",
+        secure=should_use_secure_cookie(request),
+        max_age=SESSION_MAX_AGE,
         path=session_cookie_path(),
     )
     return response
 
 
 @app.post("/logout")
-def logout():
+def logout(request: Request):
     response = RedirectResponse(url=app_url("/login"), status_code=302)
-    response.delete_cookie(COOKIE_NAME, path=session_cookie_path())
+    response.delete_cookie(COOKIE_NAME, path=session_cookie_path(), secure=should_use_secure_cookie(request), samesite="lax")
     return response
 
 

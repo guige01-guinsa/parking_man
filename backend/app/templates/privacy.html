@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>개인정보 처리방침 | {{ app_title }}</title>
+  <link rel="stylesheet" href="{{ request.url_for('static', path='app.css') }}">
+</head>
+<body class="auth-body">
+  <main class="auth-shell privacy-shell">
+    <article class="auth-card privacy-card">
+      <p class="eyebrow">Privacy Policy</p>
+      <h1>개인정보 처리방침</h1>
+      <p class="auth-copy">{{ app_title }}은 아파트 주차단속 업무를 위해 필요한 최소한의 계정, 차량, 단속 기록만 처리합니다.</p>
+
+      <section class="privacy-section">
+        <h2>처리하는 정보</h2>
+        <p>운영 계정 정보, 등록차량 정보, 번호판 조회 기록, 단속 사진, 위치와 메모, CCTV 검색요청 업무 기록을 저장할 수 있습니다.</p>
+      </section>
+
+      <section class="privacy-section">
+        <h2>이용 목적</h2>
+        <p>등록차량 확인, 미등록 차량 단속 기록, 담당자 업무 배정, 관리자 감사와 백업 복구를 위해 사용합니다.</p>
+      </section>
+
+      <section class="privacy-section">
+        <h2>보안</h2>
+        <p>서버 통신은 HTTPS 환경을 기준으로 운영하며, 세션 쿠키 보호, 권한별 화면 제한, 파일 형식과 용량 제한을 적용합니다.</p>
+      </section>
+
+      <section class="privacy-section">
+        <h2>보관 및 삭제</h2>
+        <p>운영 계정은 관리자가 사용자 관리 화면에서 삭제할 수 있습니다. 단속 기록과 차량 정보는 관리 주체의 운영 기준과 법적 보관 필요성에 따라 보관하거나 삭제합니다.</p>
+      </section>
+
+      <section class="privacy-section">
+        <h2>문의 및 삭제 요청</h2>
+        <p>계정, 차량정보, 단속기록 삭제 요청은 소속 아파트 관리자 또는 <a href="mailto:{{ privacy_contact_email }}">{{ privacy_contact_email }}</a>로 문의해 주세요.</p>
+      </section>
+
+      <div class="auth-help privacy-actions">
+        <a href="{{ request.url_for('login_page') }}" class="secondary-btn auth-link-btn">로그인 화면으로 돌아가기</a>
+      </div>
+    </article>
+  </main>
+</body>
+</html>
