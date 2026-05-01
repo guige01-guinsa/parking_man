@@ -248,7 +248,7 @@ def record_import_run(site_code: str, source_dir: Path, files_count: int, rows_c
         con.commit()
 
 
-def sync_registry_from_dir(source_dir: str | os.PathLike[str], site_code: str | None = None) -> dict[str, Any]:
+def sync_registry_from_dir(source_dir: str | os.PathLike[str], site_code: str | None = None, *, preserve_manual: bool = True) -> dict[str, Any]:
     source_path = Path(source_dir)
     source_path.mkdir(parents=True, exist_ok=True)
     resolved_site_code = normalize_site_code(site_code)
@@ -283,12 +283,25 @@ def sync_registry_from_dir(source_dir: str | os.PathLike[str], site_code: str | 
         raise ValueError(message)
 
     with connect() as con:
+        manual_rows = []
+        if preserve_manual:
+            manual_rows = [
+                dict(row)
+                for row in con.execute(
+                    """
+                    SELECT site_code, plate, unit, building, unit_number, owner_name, phone, status, valid_from, valid_to, note, source_file, source_sheet, manual_override, deleted_at
+                    FROM vehicles
+                    WHERE site_code = ? AND COALESCE(manual_override, 0) = 1 AND deleted_at IS NULL
+                    """,
+                    (resolved_site_code,),
+                ).fetchall()
+            ]
         con.execute("DELETE FROM vehicles WHERE site_code = ?", (resolved_site_code,))
         con.executemany(
             """
             INSERT INTO vehicles
-            (site_code, plate, unit, building, unit_number, owner_name, phone, status, valid_from, valid_to, note, source_file, source_sheet, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            (site_code, plate, unit, building, unit_number, owner_name, phone, status, valid_from, valid_to, note, source_file, source_sheet, manual_override, deleted_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, datetime('now'))
             """,
             [
                 (
@@ -309,6 +322,33 @@ def sync_registry_from_dir(source_dir: str | os.PathLike[str], site_code: str | 
                 for record in merged.values()
             ],
         )
+        preserved_count = 0
+        for row in manual_rows:
+            if row["plate"] in merged:
+                continue
+            con.execute(
+                """
+                INSERT INTO vehicles
+                (site_code, plate, unit, building, unit_number, owner_name, phone, status, valid_from, valid_to, note, source_file, source_sheet, manual_override, deleted_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, datetime('now'))
+                """,
+                (
+                    row["site_code"],
+                    row["plate"],
+                    row.get("unit"),
+                    row.get("building"),
+                    row.get("unit_number"),
+                    row.get("owner_name"),
+                    row.get("phone"),
+                    row.get("status") or "active",
+                    row.get("valid_from"),
+                    row.get("valid_to"),
+                    row.get("note"),
+                    row.get("source_file") or "manual",
+                    row.get("source_sheet") or "manual",
+                ),
+            )
+            preserved_count += 1
         con.execute(
             """
             INSERT INTO import_runs(site_code, source_dir, files_count, rows_count, status, message)
@@ -318,9 +358,9 @@ def sync_registry_from_dir(source_dir: str | os.PathLike[str], site_code: str | 
                 resolved_site_code,
                 str(source_path),
                 len(files),
-                len(merged),
+                len(merged) + preserved_count,
                 "success",
-                f"{len(files)}개 파일, {rows_seen}개 행 처리, {len(merged)}대 반영",
+                f"{len(files)}개 파일, {rows_seen}개 행 처리, {len(merged)}대 반영, 수동등록 {preserved_count}대 보존",
             ),
         )
         con.commit()
@@ -330,6 +370,7 @@ def sync_registry_from_dir(source_dir: str | os.PathLike[str], site_code: str | 
         "source_dir": str(source_path),
         "files_count": len(files),
         "rows_seen": rows_seen,
-        "vehicles_loaded": len(merged),
+        "vehicles_loaded": len(merged) + preserved_count,
+        "manual_preserved": preserved_count,
     }
 

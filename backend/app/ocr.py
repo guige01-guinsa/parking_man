@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import os
+import shutil
 from dataclasses import dataclass
 from typing import Any
 
@@ -193,6 +194,14 @@ def _run_tesseract(image_bytes: bytes) -> OCRScanResult:
         )
 
     tesseract_cmd = os.getenv("TESSERACT_CMD", "").strip()
+    if not tesseract_cmd:
+        resolved = shutil.which("tesseract")
+        if resolved:
+            tesseract_cmd = resolved
+        elif os.name == "nt":
+            default_windows_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+            if os.path.exists(default_windows_path):
+                tesseract_cmd = default_windows_path
     if tesseract_cmd:
         pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
 

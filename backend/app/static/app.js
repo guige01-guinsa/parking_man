@@ -3,6 +3,7 @@ const currentSiteCode = document.body.dataset.siteCode || "";
 const currentSiteName = document.body.dataset.siteName || currentSiteCode;
 const currentUsername = document.body.dataset.username || "";
 const currentRole = document.body.dataset.role || "";
+const currentCanManageVehicles = document.body.dataset.canManageVehicles === "1";
 const apiUrl = (path) => `${rootPath}${path}`;
 
 const photoInput = document.getElementById("photo");
@@ -14,6 +15,7 @@ const locationInput = document.getElementById("location");
 const memoInput = document.getElementById("memo");
 const scanBtn = document.getElementById("scan-btn");
 const checkBtn = document.getElementById("check-btn");
+const captureButtonLabel = photoInput?.closest(".capture-button");
 const saveBtn = document.getElementById("save-btn");
 const resetBtn = document.getElementById("reset-btn");
 const candidateList = document.getElementById("candidate-list");
@@ -33,11 +35,26 @@ const registryStatus = document.getElementById("registry-status");
 const registryFileInput = document.getElementById("registry-file-input");
 const uploadRegistryBtn = document.getElementById("upload-registry-btn");
 const registryFileNote = document.getElementById("registry-file-note");
+const registryPreserveManualInput = document.getElementById("registry-preserve-manual");
+const vehicleQueryInput = document.getElementById("vehicle-query");
+const vehicleSearchBtn = document.getElementById("vehicle-search-btn");
+const vehicleCreateBtn = document.getElementById("vehicle-create-btn");
+const vehicleBackupBtn = document.getElementById("vehicle-backup-btn");
+const vehicleNewPlateInput = document.getElementById("vehicle-new-plate");
+const vehicleNewUnitInput = document.getElementById("vehicle-new-unit");
+const vehicleNewOwnerInput = document.getElementById("vehicle-new-owner");
+const vehicleNewPhoneInput = document.getElementById("vehicle-new-phone");
+const vehicleBackupList = document.getElementById("vehicle-backup-list");
+const vehicleList = document.getElementById("vehicle-list");
+const capturePlaceholderInput = document.getElementById("capture-placeholder-input");
+const uploadCapturePlaceholderBtn = document.getElementById("upload-capture-placeholder-btn");
+const capturePlaceholderNote = document.getElementById("capture-placeholder-note");
 const userList = document.getElementById("user-list");
 const userCreateForm = document.getElementById("user-create-form");
 const newUserUsernameInput = document.getElementById("new-user-username");
 const newUserPasswordInput = document.getElementById("new-user-password");
 const newUserRoleInput = document.getElementById("new-user-role");
+const newUserVehicleManagerInput = document.getElementById("new-user-vehicle-manager");
 const userRefreshBtn = document.getElementById("user-refresh-btn");
 const userFilterForm = document.getElementById("user-filter-form");
 const userQueryInput = document.getElementById("user-query");
@@ -80,6 +97,13 @@ const historyDateFromInput = document.getElementById("history-date-from");
 const historyDateToInput = document.getElementById("history-date-to");
 const historyResetBtn = document.getElementById("history-reset-btn");
 const historyLoadMoreBtn = document.getElementById("history-load-more-btn");
+const historyExportPreviewBtn = document.getElementById("history-export-preview-btn");
+const exportModal = document.getElementById("export-modal");
+const exportCloseBtn = document.getElementById("export-close-btn");
+const exportSummary = document.getElementById("export-summary");
+const exportPreview = document.getElementById("export-preview");
+const exportPdfBtn = document.getElementById("export-pdf-btn");
+const exportExcelBtn = document.getElementById("export-excel-btn");
 const geoStatus = document.getElementById("geo-status");
 const statusBanner = document.getElementById("status-banner");
 const quickMemoButtons = Array.from(document.querySelectorAll(".quick-chip"));
@@ -117,11 +141,14 @@ let latestOcrCandidates = [];
 let currentCheckMatches = [];
 let currentCheckIndex = 0;
 let currentCheckRequestedPlate = "";
+let scanAttemptCount = 0;
 let cctvAssignees = [];
 let activeMobileTab = "enforce";
 let historyOffset = 0;
 let historyHasMore = false;
 const HISTORY_PAGE_SIZE = 20;
+let exportRows = [];
+let exportTruncated = false;
 let cctvOffset = 0;
 let cctvHasMore = false;
 const CCTV_PAGE_SIZE = 20;
@@ -302,9 +329,13 @@ function initFirstUseGuide() {
 
 function refreshActiveMobileTab(tab) {
   if (tab === "cctv") {
-    loadCctvRequests().catch(() => {});
+    loadCctvAssignees()
+      .catch(() => {})
+      .finally(() => loadCctvRequests().catch(() => {}));
   } else if (tab === "recent") {
     loadRecent().catch(() => {});
+  } else if (tab === "vehicle-db") {
+    loadVehicleBackups().catch(() => {});
   } else if (tab === "admin") {
     loadRegistryStatus().catch(() => {});
     loadBillingStatus().catch(() => {});
@@ -346,6 +377,14 @@ function initMobileTabs() {
   activateMobileTab(saved, { refresh: false, scroll: false });
 }
 
+function scheduleBackgroundLoad(callback) {
+  if (typeof window.requestIdleCallback === "function") {
+    window.requestIdleCallback(callback, { timeout: 2500 });
+    return;
+  }
+  window.setTimeout(callback, 300);
+}
+
 function persistField(key, value) {
   writeStoredValue(`parking:${key}`, value);
 }
@@ -380,6 +419,27 @@ function updatePreview(file) {
   photoPreview.src = objectUrl;
   photoPreview.hidden = false;
   previewPlaceholder.hidden = true;
+}
+
+function setCapturePlaceholderImage(imageUrl) {
+  const url = String(imageUrl || "").trim();
+  if (!previewPlaceholder) return;
+  previewPlaceholder.style.backgroundImage = url ? `linear-gradient(rgba(255,255,255,0.76), rgba(255,255,255,0.82)), url("${url.replaceAll('"', "%22")}")` : "";
+  previewPlaceholder.classList.toggle("has-custom-image", Boolean(url));
+}
+
+function updateCaptureLimitState() {
+  const reachedLimit = scanAttemptCount >= 2;
+  if (photoInput) {
+    photoInput.disabled = reachedLimit;
+  }
+  if (captureButtonLabel) {
+    captureButtonLabel.classList.toggle("is-disabled", reachedLimit);
+    const label = captureButtonLabel.querySelector("span");
+    if (label) {
+      label.textContent = reachedLimit ? "촬영 2회 완료" : `번호판 촬영 ${scanAttemptCount}/2`;
+    }
+  }
 }
 
 function renderIdleVerdict() {
@@ -573,7 +633,7 @@ function renderRecent(rows, append = false) {
   recentResults.className = "list-board";
   const markup = rows
     .map((row) => `
-      <article class="result-item">
+      <article class="result-item enforcement-item" data-enforcement-row="${escapeHtml(row.id)}">
         <div class="result-top">
           <button type="button" class="result-title pick-button" data-plate-pick="${escapeHtml(row.plate)}">${escapeHtml(row.plate)}</button>
           <span class="result-badge ${badgeClass(row.verdict)}">${escapeHtml(row.verdict)}</span>
@@ -582,6 +642,28 @@ function renderRecent(rows, append = false) {
         <div class="subtle">${escapeHtml(row.location || "-")} · ${escapeHtml(row.inspector || "-")} · ${escapeHtml(displayDateTime(row.created_at))}</div>
         <div class="subtle">${escapeHtml(row.owner_name || "-")} / ${escapeHtml(row.unit || "-")}${row.memo ? ` · ${escapeHtml(row.memo)}` : ""}</div>
         ${row.photo_path ? `<a class="contact-action" href="${escapeHtml(row.photo_path)}" target="_blank" rel="noopener">사진 보기</a>` : ""}
+        <div class="enforcement-edit-grid">
+          <label>
+            <span>차량번호</span>
+            <input data-enforcement-plate value="${escapeHtml(row.plate || "")}" autocomplete="off">
+          </label>
+          <label>
+            <span>단속자</span>
+            <input data-enforcement-inspector value="${escapeHtml(row.inspector || "")}" autocomplete="off">
+          </label>
+          <label>
+            <span>위치</span>
+            <input data-enforcement-location value="${escapeHtml(row.location || "")}" autocomplete="off">
+          </label>
+          <label>
+            <span>메모</span>
+            <input data-enforcement-memo value="${escapeHtml(row.memo || "")}" autocomplete="off">
+          </label>
+        </div>
+        <div class="user-action-row">
+          <button type="button" class="secondary-btn" data-enforcement-save>수정 저장</button>
+          <button type="button" class="danger-btn" data-enforcement-delete>삭제</button>
+        </div>
       </article>
     `)
     .join("");
@@ -591,6 +673,191 @@ function renderRecent(rows, append = false) {
     recentResults.innerHTML = markup;
   }
   attachResultClickHandlers(recentResults);
+  attachEnforcementCrudHandlers(recentResults);
+}
+
+function enforcementRowPayload(row) {
+  return {
+    plate: row.querySelector("[data-enforcement-plate]")?.value.trim() || "",
+    inspector: row.querySelector("[data-enforcement-inspector]")?.value.trim() || "",
+    location: row.querySelector("[data-enforcement-location]")?.value.trim() || "",
+    memo: row.querySelector("[data-enforcement-memo]")?.value.trim() || "",
+  };
+}
+
+function attachEnforcementCrudHandlers(root) {
+  root.querySelectorAll("[data-enforcement-save]").forEach((button) => {
+    button.addEventListener("click", () => saveEnforcementRow(button).catch((error) => alert(error.message)));
+  });
+  root.querySelectorAll("[data-enforcement-delete]").forEach((button) => {
+    button.addEventListener("click", () => deleteEnforcementRow(button).catch((error) => alert(error.message)));
+  });
+}
+
+async function saveEnforcementRow(button) {
+  const row = button.closest("[data-enforcement-row]");
+  if (!row) return;
+  const eventId = row.dataset.enforcementRow;
+  const payload = enforcementRowPayload(row);
+  if (!payload.plate) {
+    alert("차량번호를 입력해 주세요.");
+    return;
+  }
+
+  setStatus(`단속 기록 #${eventId} 수정 중`, "active");
+  await fetchJson(apiUrl(`/api/enforcement/events/${encodeURIComponent(eventId)}`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  await loadRecent();
+  setStatus(`단속 기록 #${eventId} 수정 완료`, "success");
+}
+
+async function deleteEnforcementRow(button) {
+  const row = button.closest("[data-enforcement-row]");
+  if (!row) return;
+  const eventId = row.dataset.enforcementRow;
+  const plate = row.querySelector("[data-enforcement-plate]")?.value.trim() || "";
+  if (!confirm(`${plate || `#${eventId}`} 단속 기록을 삭제하시겠습니까?`)) {
+    return;
+  }
+
+  setStatus(`단속 기록 #${eventId} 삭제 중`, "active");
+  await fetchJson(apiUrl(`/api/enforcement/events/${encodeURIComponent(eventId)}`), { method: "DELETE" });
+  await loadRecent();
+  setStatus(`단속 기록 #${eventId} 삭제 완료`, "success");
+}
+
+function enforcementExportTableMarkup(rows) {
+  if (!rows?.length) {
+    return '<div class="empty-state export-empty">출력할 단속 기록이 없습니다.</div>';
+  }
+  return `
+    <table class="export-table">
+      <thead>
+        <tr>
+          <th>장소(층)</th>
+          <th>단속시간</th>
+          <th>차량번호</th>
+          <th>위반내용</th>
+          <th>연락처&위치</th>
+          <th>경고장</th>
+          <th>문자</th>
+          <th>통화</th>
+          <th>동호수</th>
+          <th>차주</th>
+          <th>단속자</th>
+          <th>판정</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows
+          .map((row) => {
+            const contactLocation = [row.phone, row.location].filter(Boolean).join(" / ");
+            return `
+              <tr>
+                <td>${escapeHtml(row.location || "")}</td>
+                <td>${escapeHtml(displayDateTime(row.created_at))}</td>
+                <td>${escapeHtml(row.plate || "")}</td>
+                <td>${escapeHtml(row.memo || row.verdict_message || "")}</td>
+                <td>${escapeHtml(contactLocation)}</td>
+                <td></td>
+                <td></td>
+                <td></td>
+                <td>${escapeHtml(row.unit || "")}</td>
+                <td>${escapeHtml(row.owner_name || "")}</td>
+                <td>${escapeHtml(row.inspector || "")}</td>
+                <td>${escapeHtml(row.verdict || "")}</td>
+              </tr>
+            `;
+          })
+          .join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderExportPreview(data) {
+  exportRows = Array.isArray(data.items) ? data.items : [];
+  exportTruncated = Boolean(data.truncated);
+  const countText = `${formatCount(exportRows.length)}건`;
+  const truncatedText = exportTruncated ? ` · 최대 ${formatCount(data.limit || exportRows.length)}건까지만 표시됩니다.` : "";
+  if (exportSummary) {
+    exportSummary.textContent = `${data.site_name || currentSiteName || "-"} (${data.site_code || currentSiteCode || "-"}) · 출력 대상 ${countText}${truncatedText}`;
+  }
+  if (exportPreview) {
+    exportPreview.innerHTML = enforcementExportTableMarkup(exportRows);
+  }
+  if (exportPdfBtn) exportPdfBtn.disabled = !exportRows.length;
+  if (exportExcelBtn) exportExcelBtn.disabled = !exportRows.length;
+}
+
+async function openExportPreview() {
+  if (!exportModal) return;
+  exportModal.hidden = false;
+  exportRows = [];
+  if (exportSummary) exportSummary.textContent = "출력할 기록을 불러오는 중입니다.";
+  if (exportPreview) exportPreview.innerHTML = "";
+  if (exportPdfBtn) exportPdfBtn.disabled = true;
+  if (exportExcelBtn) exportExcelBtn.disabled = true;
+
+  const params = historyExportParams();
+  params.set("limit", "1000");
+  const data = await fetchJson(`${apiUrl("/api/enforcement/export/rows")}?${params.toString()}`);
+  renderExportPreview(data);
+}
+
+function closeExportPreview() {
+  if (exportModal) {
+    exportModal.hidden = true;
+  }
+}
+
+function printExportPdf() {
+  if (!exportRows.length) {
+    alert("출력할 단속 기록이 없습니다.");
+    return;
+  }
+  const printWindow = window.open("", "_blank");
+  if (!printWindow) {
+    alert("팝업이 차단되어 PDF 미리보기를 열지 못했습니다. 브라우저 팝업 허용 후 다시 시도하세요.");
+    return;
+  }
+  const generatedAt = displayDateTime(new Date().toISOString());
+  printWindow.document.write(`
+    <!doctype html>
+    <html lang="ko">
+    <head>
+      <meta charset="utf-8">
+      <title>불법주차단속대장</title>
+      <style>
+        body { font-family: "Malgun Gothic", "Noto Sans KR", sans-serif; color: #111; margin: 24px; }
+        h1 { text-align: center; margin: 0 0 10px; font-size: 24px; }
+        .meta { display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 12px; }
+        table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
+        th, td { border: 1px solid #555; padding: 6px 5px; vertical-align: middle; word-break: break-word; }
+        th { background: #eef3f0; text-align: center; }
+        @page { size: A4 landscape; margin: 12mm; }
+      </style>
+    </head>
+    <body>
+      <h1>불법주차단속대장</h1>
+      <div class="meta">
+        <span>${escapeHtml(currentSiteName || currentSiteCode || "-")}</span>
+        <span>출력일 ${escapeHtml(generatedAt)} · ${escapeHtml(formatCount(exportRows.length))}건</span>
+      </div>
+      ${enforcementExportTableMarkup(exportRows)}
+      <script>window.onload = () => { window.print(); };</script>
+    </body>
+    </html>
+  `);
+  printWindow.document.close();
+}
+
+function downloadExportExcel() {
+  const params = historyExportParams();
+  window.location.href = `${apiUrl("/api/enforcement/export.xlsx")}?${params.toString()}`;
 }
 
 function renderRegistryStatus(status) {
@@ -613,11 +880,90 @@ function renderRegistryStatus(status) {
       <div>아파트: ${escapeHtml(status.site_name || currentSiteName || "-")} (${escapeHtml(status.site_code || currentSiteCode || "-")})</div>
       <div>폴더: ${escapeHtml(status.import_dir)}</div>
       <div class="subtle">${escapeHtml(last?.message || "아직 동기화 이력이 없습니다.")}</div>
+      <div class="subtle">수동 등록/수정 차량: ${escapeHtml(status.manual_vehicle_count || 0)}대</div>
       <div class="subtle">AI 학습 누적: ${escapeHtml(learning.total_feedback || 0)}건 / 사용자 교정: ${escapeHtml(learning.corrected_feedback || 0)}건</div>
       <div class="subtle">${lastFeedback ? `최근 학습: ${escapeHtml(lastFeedback.suggested_plate || "-")} → ${escapeHtml(lastFeedback.corrected_plate || "-")} (${escapeHtml(lastFeedback.created_at || "-")})` : "아직 OCR 학습 이력이 없습니다."}</div>
     </div>
     <div class="import-file-list">${fileMarkup}</div>
   `;
+  renderVehicleBackups(status.backups || []);
+}
+
+function vehiclePayloadFromRow(row) {
+  return {
+    plate: row.querySelector("[data-vehicle-plate]")?.value.trim() || "",
+    unit: row.querySelector("[data-vehicle-unit]")?.value.trim() || "",
+    owner_name: row.querySelector("[data-vehicle-owner]")?.value.trim() || "",
+    phone: row.querySelector("[data-vehicle-phone]")?.value.trim() || "",
+    status: row.querySelector("[data-vehicle-status]")?.value.trim() || "active",
+    note: row.querySelector("[data-vehicle-note]")?.value.trim() || "",
+  };
+}
+
+function renderVehicleList(data) {
+  if (!vehicleList) return;
+  const rows = Array.isArray(data?.items) ? data.items : [];
+  if (!rows.length) {
+    vehicleList.className = "list-board empty-state";
+    vehicleList.textContent = data?.message || "조회된 등록차량이 없습니다.";
+    return;
+  }
+  vehicleList.className = "list-board";
+  const canManage = Boolean(data.can_manage);
+  const row = rows[0];
+  vehicleList.innerHTML = `
+      <article class="result-item vehicle-item" data-vehicle-row="${escapeHtml(row.plate || "")}">
+        <div class="result-top">
+          <div>
+            <div class="result-title">${escapeHtml(row.plate || "-")}</div>
+            <div class="subtle">${escapeHtml(row.owner_name || "-")} / ${escapeHtml(row.unit || "-")}</div>
+          </div>
+          <span class="result-badge ${row.manual_override ? "badge-temp" : "badge-ok"}">${row.manual_override ? "수동" : "Excel"}</span>
+        </div>
+        <div class="enforcement-edit-grid">
+          <label><span>차량번호</span><input data-vehicle-plate value="${escapeHtml(row.plate || "")}" ${canManage ? "" : "disabled"}></label>
+          <label><span>동호수</span><input data-vehicle-unit value="${escapeHtml(row.unit || "")}" ${canManage ? "" : "disabled"}></label>
+          <label><span>차주</span><input data-vehicle-owner value="${escapeHtml(row.owner_name || "")}" ${canManage ? "" : "disabled"}></label>
+          <label><span>연락처</span><input data-vehicle-phone value="${escapeHtml(row.phone || "")}" ${canManage ? "" : "disabled"}></label>
+          <label><span>상태</span><input data-vehicle-status value="${escapeHtml(row.status || "active")}" ${canManage ? "" : "disabled"}></label>
+          <label><span>비고</span><input data-vehicle-note value="${escapeHtml(row.note || "")}" ${canManage ? "" : "disabled"}></label>
+        </div>
+        ${canManage ? `
+          <div class="user-action-row">
+            <button type="button" class="secondary-btn" data-vehicle-save>수정 저장</button>
+            <button type="button" class="danger-btn" data-vehicle-delete>삭제</button>
+          </div>
+        ` : ""}
+      </article>
+    `;
+  vehicleList.querySelectorAll("[data-vehicle-save]").forEach((button) => {
+    button.addEventListener("click", () => saveVehicleRow(button).catch((error) => alert(error.message)));
+  });
+  vehicleList.querySelectorAll("[data-vehicle-delete]").forEach((button) => {
+    button.addEventListener("click", () => deleteVehicleRow(button).catch((error) => alert(error.message)));
+  });
+}
+
+function renderVehicleBackups(backups) {
+  if (!vehicleBackupList) return;
+  if (!backups?.length) {
+    vehicleBackupList.className = "status-board empty-state";
+    vehicleBackupList.textContent = "아직 등록차량 DB 백업이 없습니다.";
+    return;
+  }
+  vehicleBackupList.className = "status-board";
+  vehicleBackupList.innerHTML = backups
+    .map((backup) => `
+      <div class="import-file-item" data-vehicle-backup="${escapeHtml(backup.id)}">
+        <strong>${escapeHtml(backup.backup_name || `백업 #${backup.id}`)}</strong>
+        <span>${escapeHtml(backup.vehicles_count || 0)}대 · ${escapeHtml(displayDateTime(backup.created_at))}</span>
+        <button type="button" class="ghost-btn" data-vehicle-restore>복구</button>
+      </div>
+    `)
+    .join("");
+  vehicleBackupList.querySelectorAll("[data-vehicle-restore]").forEach((button) => {
+    button.addEventListener("click", () => restoreVehicleBackup(button).catch((error) => alert(error.message)));
+  });
 }
 
 function registryFileErrors(files) {
@@ -684,6 +1030,7 @@ function renderUserList(users) {
               <div class="result-title user-title">
                 <span>${escapeHtml(user.username)}</span>
                 ${isCurrent ? '<span class="self-chip">내 계정</span>' : ""}
+                ${user.can_manage_vehicles ? '<span class="self-chip">DB 권한</span>' : ""}
               </div>
               <div class="subtle">${escapeHtml(user.site_code || currentSiteCode || "-")} · 생성일 ${escapeHtml(user.created_at || "-")}</div>
             </div>
@@ -699,6 +1046,10 @@ function renderUserList(users) {
             <label>
               <span>새 비밀번호</span>
               <input type="password" data-user-password placeholder="변경할 때만 입력">
+            </label>
+            <label class="inline-check">
+              <input type="checkbox" data-user-vehicle-manager ${user.can_manage_vehicles ? "checked" : ""}>
+              <span>등록차량 DB 접근/관리 권한</span>
             </label>
           </div>
           <div class="user-action-row">
@@ -768,6 +1119,11 @@ function resetUserRow(button) {
 
 function displayDateTime(value) {
   return String(value || "-").replace("T", " ").slice(0, 16);
+}
+
+function displayDateTimeInputValue(value) {
+  const text = String(value || "").replace(" ", "T");
+  return text.slice(0, 16);
 }
 
 function displayDateTimeRange(startValue, endValue) {
@@ -981,6 +1337,18 @@ function historyRangeValues() {
   return { dateFrom: "", dateTo: "" };
 }
 
+function historyExportParams() {
+  const { dateFrom, dateTo } = historyRangeValues();
+  const params = new URLSearchParams();
+  const q = historyQueryInput?.value.trim() || "";
+  const verdict = historyVerdictInput?.value || "";
+  if (q) params.set("q", q);
+  if (verdict) params.set("verdict", verdict);
+  if (dateFrom) params.set("date_from", dateFrom);
+  if (dateTo) params.set("date_to", dateTo);
+  return params;
+}
+
 function syncHistoryRangeState() {
   const isCustom = historyRangeInput?.value === "custom";
   document.querySelector(".history-custom-range")?.classList.toggle("is-visible", isCustom);
@@ -1015,9 +1383,6 @@ function renderCctvAdminControls(row) {
       <span>작업지시</span>
       <textarea data-cctv-instruction rows="2" placeholder="예: 18:20~18:40 103동 출입구 방향 확인">${escapeHtml(row.instruction || "")}</textarea>
     </label>
-    <div class="user-action-row">
-      <button type="button" class="secondary-btn" data-cctv-save>작업지시 저장</button>
-    </div>
   `;
 }
 
@@ -1051,7 +1416,29 @@ function renderCctvRequests(rows) {
             ${photo}
           </div>
           ${row.instruction && !currentCanAssignCctv ? `<div class="cctv-instruction-view">작업지시: ${escapeHtml(row.instruction)}</div>` : ""}
+          <div class="cctv-edit-grid">
+            <label>
+              <span>위치</span>
+              <input data-cctv-location value="${escapeHtml(row.location || "")}" autocomplete="off">
+            </label>
+            <label>
+              <span>시작 시간</span>
+              <input data-cctv-start-time type="datetime-local" value="${escapeHtml(displayDateTimeInputValue(row.search_start_time || row.search_time))}">
+            </label>
+            <label>
+              <span>끝 시간</span>
+              <input data-cctv-end-time type="datetime-local" value="${escapeHtml(displayDateTimeInputValue(row.search_end_time || row.search_time))}">
+            </label>
+            <label class="cctv-edit-content">
+              <span>내용</span>
+              <textarea data-cctv-content rows="2">${escapeHtml(row.content || "")}</textarea>
+            </label>
+          </div>
           ${renderCctvAdminControls(row)}
+          <div class="user-action-row">
+            <button type="button" class="secondary-btn" data-cctv-save>수정 저장</button>
+            ${currentCanAssignCctv || row.requester_username === currentUsername ? '<button type="button" class="danger-btn" data-cctv-delete>삭제</button>' : ""}
+          </div>
         </article>
       `;
     })
@@ -1059,6 +1446,9 @@ function renderCctvRequests(rows) {
 
   cctvRequestList.querySelectorAll("[data-cctv-save]").forEach((button) => {
     button.addEventListener("click", () => saveCctvAssignment(button).catch((error) => alert(error.message)));
+  });
+  cctvRequestList.querySelectorAll("[data-cctv-delete]").forEach((button) => {
+    button.addEventListener("click", () => deleteCctvRequest(button).catch((error) => alert(error.message)));
   });
 }
 
@@ -1094,6 +1484,11 @@ async function runCheck() {
 }
 
 async function runScan() {
+  if (scanAttemptCount > 2) {
+    plateInput.focus();
+    await runCheck();
+    return;
+  }
   if (!photoInput.files?.length) {
     if (plateInput.value.trim()) {
       await runCheck();
@@ -1122,6 +1517,12 @@ async function runScan() {
   if (result.match) {
     renderVerdict(result.match);
     setStatus(`${result.best_plate} 판독 완료`, result.match.verdict === "OK" ? "success" : result.match.verdict === "TEMP" ? "warn" : "danger");
+    if (scanAttemptCount >= 2 && result.match.verdict === "UNREGISTERED") {
+      plateInput.focus();
+      setStatus("2회 촬영 후 미등록입니다. 직접 조회로 전환합니다.", "danger");
+      await runCheck();
+      setStatus("2회 촬영 후 미등록입니다. 차량번호를 확인해 직접 조회하세요.", "danger");
+    }
   } else {
     setStatus("후보를 확인해 수동 선택해 주세요.", "warn");
   }
@@ -1138,6 +1539,8 @@ function vibrate(pattern) {
 
 function resetWorkflow() {
   photoInput.value = "";
+  scanAttemptCount = 0;
+  updateCaptureLimitState();
   updatePreview(null);
   plateInput.value = "";
   memoInput.value = "";
@@ -1189,17 +1592,9 @@ async function searchRegistry() {
 async function loadRecent({ append = false } = {}) {
   if (!recentResults) return;
   const offset = append ? historyOffset : 0;
-  const { dateFrom, dateTo } = historyRangeValues();
-  const params = new URLSearchParams({
-    limit: String(HISTORY_PAGE_SIZE),
-    offset: String(offset),
-  });
-  const q = historyQueryInput?.value.trim() || "";
-  const verdict = historyVerdictInput?.value || "";
-  if (q) params.set("q", q);
-  if (verdict) params.set("verdict", verdict);
-  if (dateFrom) params.set("date_from", dateFrom);
-  if (dateTo) params.set("date_to", dateTo);
+  const params = historyExportParams();
+  params.set("limit", String(HISTORY_PAGE_SIZE));
+  params.set("offset", String(offset));
 
   const data = await fetchJson(`${apiUrl("/api/enforcement/history")}?${params.toString()}`);
   const rows = Array.isArray(data.items) ? data.items : [];
@@ -1217,11 +1612,22 @@ async function loadRegistryStatus() {
   renderRegistryStatus(data);
 }
 
+async function loadVehicleBackups() {
+  if (!vehicleBackupList || !currentCanManageVehicles) return;
+  const data = await fetchJson(apiUrl("/api/registry/backups"));
+  renderVehicleBackups(data);
+}
+
 async function syncRegistry() {
   setStatus("Excel 등록차량 동기화 중", "active");
-  await fetchJson(apiUrl("/api/registry/sync"), { method: "POST" });
+  await fetchJson(apiUrl("/api/registry/sync"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ preserve_manual: registryPreserveManualInput?.checked !== false }),
+  });
   await loadRegistryStatus();
   await searchRegistry();
+  await loadVehicles();
   setStatus("등록차량 다시 읽기 완료", "success");
 }
 
@@ -1243,7 +1649,8 @@ async function uploadRegistryFiles() {
 
   let result;
   try {
-    result = await fetchJson(apiUrl("/api/registry/upload"), { method: "POST", body: formData });
+    const params = new URLSearchParams({ preserve_manual: registryPreserveManualInput?.checked === false ? "0" : "1" });
+    result = await fetchJson(`${apiUrl("/api/registry/upload")}?${params.toString()}`, { method: "POST", body: formData });
   } catch (error) {
     setRegistryFileNote(`업로드 실패:\n${error.message || error}`, "error");
     setStatus("Excel 업로드 실패", "danger");
@@ -1253,7 +1660,148 @@ async function uploadRegistryFiles() {
   renderRegistrySelection();
   await loadRegistryStatus();
   await searchRegistry();
+  await loadVehicles();
   setStatus(`${result.saved_count}개 Excel 업로드 및 동기화 완료`, "success");
+}
+
+async function loadVehicles() {
+  if (!vehicleList) return;
+  const q = vehicleQueryInput?.value.trim() || "";
+  if (!q) {
+    renderVehicleList({ items: [], message: "조회할 차량번호, 동호수, 차주 또는 연락처를 입력해 주세요." });
+    return;
+  }
+  const params = new URLSearchParams({ q });
+  const data = await fetchJson(`${apiUrl("/api/registry/vehicles")}?${params.toString()}`);
+  renderVehicleList(data);
+}
+
+async function createVehicle() {
+  if (!vehicleNewPlateInput) return;
+  const payload = {
+    plate: vehicleNewPlateInput.value.trim(),
+    unit: vehicleNewUnitInput?.value.trim() || "",
+    owner_name: vehicleNewOwnerInput?.value.trim() || "",
+    phone: vehicleNewPhoneInput?.value.trim() || "",
+    status: "active",
+    note: "수동 등록",
+  };
+  if (!payload.plate) {
+    alert("차량번호를 입력해 주세요.");
+    return;
+  }
+  setStatus("등록차량 수동 등록 중", "active");
+  await fetchJson(apiUrl("/api/registry/vehicles"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  vehicleNewPlateInput.value = "";
+  if (vehicleNewUnitInput) vehicleNewUnitInput.value = "";
+  if (vehicleNewOwnerInput) vehicleNewOwnerInput.value = "";
+  if (vehicleNewPhoneInput) vehicleNewPhoneInput.value = "";
+  if (vehicleQueryInput) vehicleQueryInput.value = payload.plate;
+  await loadRegistryStatus();
+  await loadVehicles();
+  setStatus("등록차량 수동 등록 완료", "success");
+}
+
+async function saveVehicleRow(button) {
+  const row = button.closest("[data-vehicle-row]");
+  if (!row) return;
+  const originalPlate = row.dataset.vehicleRow || "";
+  const payload = vehiclePayloadFromRow(row);
+  if (!payload.plate) {
+    alert("차량번호를 입력해 주세요.");
+    return;
+  }
+  setStatus(`${originalPlate} 등록차량 수정 중`, "active");
+  await fetchJson(apiUrl(`/api/registry/vehicles/${encodeURIComponent(originalPlate)}`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  await loadRegistryStatus();
+  await loadVehicles();
+  setStatus(`${payload.plate} 등록차량 수정 완료`, "success");
+}
+
+async function deleteVehicleRow(button) {
+  const row = button.closest("[data-vehicle-row]");
+  if (!row) return;
+  const plate = row.dataset.vehicleRow || "";
+  if (!confirm(`${plate} 등록차량을 삭제하시겠습니까?`)) return;
+  setStatus(`${plate} 등록차량 삭제 중`, "active");
+  await fetchJson(apiUrl(`/api/registry/vehicles/${encodeURIComponent(plate)}`), { method: "DELETE" });
+  await loadRegistryStatus();
+  await loadVehicles();
+  setStatus(`${plate} 등록차량 삭제 완료`, "success");
+}
+
+async function createVehicleBackup() {
+  setStatus("등록차량 DB 백업 중", "active");
+  await fetchJson(apiUrl("/api/registry/backups"), { method: "POST" });
+  await loadRegistryStatus();
+  await loadVehicleBackups();
+  setStatus("등록차량 DB 백업 완료", "success");
+}
+
+async function restoreVehicleBackup(button) {
+  const row = button.closest("[data-vehicle-backup]");
+  if (!row) return;
+  const backupId = row.dataset.vehicleBackup;
+  if (!confirm("현재 등록차량 DB를 백업한 뒤 선택한 백업으로 복구하시겠습니까?")) return;
+  setStatus(`등록차량 DB 백업 #${backupId} 복구 중`, "active");
+  await fetchJson(apiUrl(`/api/registry/backups/${encodeURIComponent(backupId)}/restore`), { method: "POST" });
+  await loadRegistryStatus();
+  await loadVehicleBackups();
+  await loadVehicles();
+  setStatus(`등록차량 DB 백업 #${backupId} 복구 완료`, "success");
+}
+
+async function loadSiteSettings() {
+  const settings = await fetchJson(apiUrl("/api/site/settings"));
+  setCapturePlaceholderImage(settings.capture_placeholder_image_url || "");
+  if (capturePlaceholderNote) {
+    capturePlaceholderNote.textContent = settings.capture_placeholder_image_url ? "현재 사용자 지정 이미지를 사용 중입니다." : "현재 기본 화면을 사용 중입니다.";
+  }
+}
+
+function renderCapturePlaceholderSelection() {
+  if (!capturePlaceholderInput || !capturePlaceholderNote) return false;
+  const file = capturePlaceholderInput.files?.[0];
+  if (!file) {
+    capturePlaceholderNote.textContent = "현재 기본 화면을 사용 중입니다.";
+    return false;
+  }
+  if (!file.type.startsWith("image/")) {
+    capturePlaceholderNote.textContent = "이미지 파일만 선택할 수 있습니다.";
+    return false;
+  }
+  capturePlaceholderNote.textContent = `선택됨: ${file.name}`;
+  return true;
+}
+
+async function uploadCapturePlaceholderImage() {
+  if (!capturePlaceholderInput?.files?.length) {
+    alert("촬영 초기화면 이미지를 먼저 선택해 주세요.");
+    return;
+  }
+  if (!renderCapturePlaceholderSelection()) {
+    alert(capturePlaceholderNote?.textContent || "이미지 선택 내용을 확인해 주세요.");
+    return;
+  }
+
+  setStatus("촬영 초기화면 이미지 저장 중", "active");
+  const formData = new FormData();
+  formData.append("image", capturePlaceholderInput.files[0]);
+  const settings = await fetchJson(apiUrl("/api/site/settings/capture-placeholder"), { method: "POST", body: formData });
+  capturePlaceholderInput.value = "";
+  setCapturePlaceholderImage(settings.capture_placeholder_image_url || "");
+  if (capturePlaceholderNote) {
+    capturePlaceholderNote.textContent = "촬영 초기화면 이미지 저장 완료";
+  }
+  setStatus("촬영 초기화면 이미지 저장 완료", "success");
 }
 
 async function loadCctvAssignees() {
@@ -1320,20 +1868,54 @@ async function saveCctvAssignment(button) {
   const workWeight = Number(row.querySelector("[data-cctv-weight]")?.value || 1);
   const status = row.querySelector("[data-cctv-status]")?.value || "requested";
   const instruction = row.querySelector("[data-cctv-instruction]")?.value || "";
+  const location = row.querySelector("[data-cctv-location]")?.value.trim() || "";
+  const searchStartTime = row.querySelector("[data-cctv-start-time]")?.value || "";
+  const searchEndTime = row.querySelector("[data-cctv-end-time]")?.value || "";
+  const content = row.querySelector("[data-cctv-content]")?.value.trim() || "";
+  if (!location || !searchStartTime || !searchEndTime || !content) {
+    alert("위치, 시작 시간, 끝 시간, 내용을 모두 입력해 주세요.");
+    return;
+  }
+  if (searchEndTime < searchStartTime) {
+    alert("끝 시간은 시작 시간 이후로 입력해 주세요.");
+    return;
+  }
 
   setStatus(`CCTV 요청 #${requestId} 작업지시 저장 중`, "active");
+  const payload = {
+    location,
+    search_start_time: searchStartTime,
+    search_end_time: searchEndTime,
+    content,
+  };
+  if (currentCanAssignCctv) {
+    payload.assigned_to = assignee;
+    payload.work_weight = workWeight;
+    payload.instruction = instruction;
+    payload.status = status;
+  }
   await fetchJson(apiUrl(`/api/cctv/requests/${encodeURIComponent(requestId)}`), {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      assigned_to: assignee,
-      work_weight: workWeight,
-      instruction,
-      status,
-    }),
+    body: JSON.stringify(payload),
   });
   await loadCctvRequests();
-  setStatus(`CCTV 요청 #${requestId} 작업지시 저장 완료`, "success");
+  setStatus(`CCTV 요청 #${requestId} 수정 완료`, "success");
+}
+
+async function deleteCctvRequest(button) {
+  const row = button.closest("[data-cctv-row]");
+  if (!row) return;
+  const requestId = row.dataset.cctvRow;
+  const location = row.querySelector("[data-cctv-location]")?.value.trim() || "";
+  if (!confirm(`${location || `#${requestId}`} CCTV 요청을 삭제하시겠습니까?`)) {
+    return;
+  }
+
+  setStatus(`CCTV 요청 #${requestId} 삭제 중`, "active");
+  await fetchJson(apiUrl(`/api/cctv/requests/${encodeURIComponent(requestId)}`), { method: "DELETE" });
+  await loadCctvRequests();
+  setStatus(`CCTV 요청 #${requestId} 삭제 완료`, "success");
 }
 
 async function loadUsers({ append = false } = {}) {
@@ -1455,6 +2037,7 @@ async function createUser() {
   const username = newUserUsernameInput.value.trim().toLowerCase();
   const password = newUserPasswordInput.value;
   const role = newUserRoleInput.value;
+  const canManageVehicles = Boolean(newUserVehicleManagerInput?.checked);
 
   if (!username) {
     alert("아이디를 입력해 주세요.");
@@ -1469,12 +2052,13 @@ async function createUser() {
   await fetchJson(apiUrl("/api/users"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password, role }),
+    body: JSON.stringify({ username, password, role, can_manage_vehicles: canManageVehicles }),
   });
 
   newUserUsernameInput.value = "";
   newUserPasswordInput.value = "";
   newUserRoleInput.value = "guard";
+  if (newUserVehicleManagerInput) newUserVehicleManagerInput.checked = false;
   await loadUsers();
   await loadBillingStatus();
   setStatus(`사용자 ${username} 등록 완료`, "success");
@@ -1489,6 +2073,7 @@ async function saveUserRow(button) {
   const passwordInput = row.querySelector("[data-user-password]");
   const role = roleSelect?.value || row.dataset.originalRole || "cleaner";
   const password = passwordInput?.value || "";
+  const canManageVehicles = Boolean(row.querySelector("[data-user-vehicle-manager]")?.checked);
 
   setStatus(`사용자 ${username} 정보 저장 중`, "active");
   await fetchJson(apiUrl(`/api/users/${encodeURIComponent(username)}`), {
@@ -1497,6 +2082,7 @@ async function saveUserRow(button) {
     body: JSON.stringify({
       role,
       password: password || null,
+      can_manage_vehicles: canManageVehicles,
     }),
   });
 
@@ -1543,6 +2129,10 @@ function loadGeolocation() {
 
 photoInput?.addEventListener("change", () => {
   const file = photoInput.files?.[0];
+  if (file) {
+    scanAttemptCount += 1;
+    updateCaptureLimitState();
+  }
   updatePreview(file || null);
   if (file) {
     runScan().catch((error) => alert(error.message));
@@ -1552,6 +2142,7 @@ photoInput?.addEventListener("change", () => {
 });
 
 registryFileInput?.addEventListener("change", renderRegistrySelection);
+capturePlaceholderInput?.addEventListener("change", renderCapturePlaceholderSelection);
 
 plateInput?.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
@@ -1591,6 +2182,16 @@ matchNextBtn?.addEventListener("click", () => shiftCheckMatch(1));
 document.getElementById("search-btn")?.addEventListener("click", () => searchRegistry().catch((error) => alert(error.message)));
 document.getElementById("sync-btn")?.addEventListener("click", () => syncRegistry().catch((error) => alert(error.message)));
 uploadRegistryBtn?.addEventListener("click", () => uploadRegistryFiles().catch((error) => alert(error.message)));
+vehicleSearchBtn?.addEventListener("click", () => loadVehicles().catch((error) => alert(error.message)));
+vehicleCreateBtn?.addEventListener("click", () => createVehicle().catch((error) => alert(error.message)));
+vehicleBackupBtn?.addEventListener("click", () => createVehicleBackup().catch((error) => alert(error.message)));
+vehicleQueryInput?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    loadVehicles().catch((error) => alert(error.message));
+  }
+});
+uploadCapturePlaceholderBtn?.addEventListener("click", () => uploadCapturePlaceholderImage().catch((error) => alert(error.message)));
 userRefreshBtn?.addEventListener("click", () => loadUsers().catch((error) => alert(error.message)));
 siteRefreshBtn?.addEventListener("click", () => loadSites().catch((error) => alert(error.message)));
 billingRefreshBtn?.addEventListener("click", () => loadBillingStatus().catch((error) => alert(error.message)));
@@ -1629,6 +2230,15 @@ historyResetBtn?.addEventListener("click", () => {
 });
 historyRangeInput?.addEventListener("change", syncHistoryRangeState);
 historyLoadMoreBtn?.addEventListener("click", () => loadRecent({ append: true }).catch((error) => alert(error.message)));
+historyExportPreviewBtn?.addEventListener("click", () => openExportPreview().catch((error) => alert(error.message)));
+exportCloseBtn?.addEventListener("click", closeExportPreview);
+exportModal?.addEventListener("click", (event) => {
+  if (event.target === exportModal) {
+    closeExportPreview();
+  }
+});
+exportPdfBtn?.addEventListener("click", printExportPdf);
+exportExcelBtn?.addEventListener("click", downloadExportExcel);
 document.getElementById("geo-btn")?.addEventListener("click", loadGeolocation);
 document.getElementById("search-query")?.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
@@ -1648,6 +2258,8 @@ siteCreateForm?.addEventListener("submit", (event) => {
 hydrateFields();
 syncQuickMemoState();
 renderRegistrySelection();
+renderCapturePlaceholderSelection();
+updateCaptureLimitState();
 renderCandidates([]);
 renderIdleVerdict();
 setStatus("촬영 대기 중", "idle");
@@ -1655,21 +2267,58 @@ syncHistoryRangeState();
 initFirstUseGuide();
 initMobileTabs();
 
-loadRecent().catch((error) => {
-  recentResults.className = "list-board empty-state";
-  recentResults.textContent = error.message;
-});
-loadRegistryStatus().catch(() => {});
-loadBillingStatus().catch(() => {});
-loadUsers().catch(() => {});
-loadSites().catch(() => {});
-loadCctvAssignees()
-  .catch(() => {})
-  .finally(() => {
-    loadCctvRequests().catch((error) => {
-      if (cctvRequestList) {
-        cctvRequestList.className = "list-board empty-state";
-        cctvRequestList.textContent = error.message;
-      }
+loadSiteSettings().catch(() => {});
+
+const isCompactScreen = window.matchMedia("(max-width: 720px)").matches;
+
+if (isCompactScreen) {
+  if (activeMobileTab === "recent") {
+    loadRecent().catch((error) => {
+      recentResults.className = "list-board empty-state";
+      recentResults.textContent = error.message;
     });
+  }
+  if (activeMobileTab === "cctv") {
+    loadCctvAssignees()
+      .catch(() => {})
+      .finally(() => {
+        loadCctvRequests().catch((error) => {
+          if (cctvRequestList) {
+            cctvRequestList.className = "list-board empty-state";
+            cctvRequestList.textContent = error.message;
+          }
+        });
+      });
+  }
+  if (activeMobileTab === "vehicle-db") {
+    loadVehicleBackups().catch(() => {});
+  }
+  if (activeMobileTab === "admin") {
+    loadRegistryStatus().catch(() => {});
+    loadBillingStatus().catch(() => {});
+    loadUsers().catch(() => {});
+    loadSites().catch(() => {});
+  }
+} else {
+  loadRecent().catch((error) => {
+    recentResults.className = "list-board empty-state";
+    recentResults.textContent = error.message;
   });
+  loadRegistryStatus().catch(() => {});
+  loadVehicleBackups().catch(() => {});
+  loadBillingStatus().catch(() => {});
+  loadUsers().catch(() => {});
+  loadSites().catch(() => {});
+  scheduleBackgroundLoad(() => {
+    loadCctvAssignees()
+      .catch(() => {})
+      .finally(() => {
+        loadCctvRequests().catch((error) => {
+          if (cctvRequestList) {
+            cctvRequestList.className = "list-board empty-state";
+            cctvRequestList.textContent = error.message;
+          }
+        });
+      });
+  });
+}

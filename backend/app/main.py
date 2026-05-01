@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from io import BytesIO
 import json
 import os
 import re
@@ -16,6 +17,9 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 from pydantic import BaseModel, Field
 
 from .auth import COOKIE_NAME, make_session, pbkdf2_hash, pbkdf2_verify, read_session, require_role
@@ -94,11 +98,30 @@ class UserCreateRequest(BaseModel):
     username: str
     password: str
     role: str
+    can_manage_vehicles: bool = False
 
 
 class UserUpdateRequest(BaseModel):
     role: str | None = None
     password: str | None = None
+    can_manage_vehicles: bool | None = None
+
+
+class VehicleUpsertRequest(BaseModel):
+    plate: str
+    unit: str | None = None
+    building: str | None = None
+    unit_number: str | None = None
+    owner_name: str | None = None
+    phone: str | None = None
+    status: str | None = "active"
+    valid_from: str | None = None
+    valid_to: str | None = None
+    note: str | None = None
+
+
+class RegistrySyncRequest(BaseModel):
+    preserve_manual: bool = True
 
 
 class SiteCreateRequest(BaseModel):
@@ -123,10 +146,21 @@ class GooglePlayVerifyRequest(BaseModel):
 
 
 class CctvAssignmentRequest(BaseModel):
+    location: str | None = None
+    search_start_time: str | None = None
+    search_end_time: str | None = None
+    content: str | None = None
     assigned_to: str | None = None
     work_weight: int | None = Field(None, ge=1, le=5)
     instruction: str | None = None
     status: str | None = None
+
+
+class EnforcementEventUpdateRequest(BaseModel):
+    plate: str | None = None
+    inspector: str | None = None
+    location: str | None = None
+    memo: str | None = None
 
 
 USERNAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{2,31}$")
@@ -893,6 +927,142 @@ def normalize_history_datetime(value: str | None, *, end_of_range: bool = False)
     return text
 
 
+def build_enforcement_history_query(
+    site_code: str,
+    *,
+    q: str = "",
+    verdict: str = "",
+    date_from: str = "",
+    date_to: str = "",
+) -> tuple[str, list[Any]]:
+    where = ["e.site_code = ?"]
+    params: list[Any] = [site_code]
+
+    query = str(q or "").strip()
+    if query:
+        normalized_plate = normalize_plate(query)
+        like = f"%{query}%"
+        plate_like = f"%{normalized_plate or query}%"
+        where.append(
+            """
+            (
+              e.plate LIKE ?
+              OR COALESCE(e.unit, '') LIKE ?
+              OR COALESCE(e.owner_name, '') LIKE ?
+              OR COALESCE(e.inspector, '') LIKE ?
+              OR COALESCE(e.location, '') LIKE ?
+              OR COALESCE(e.memo, '') LIKE ?
+            )
+            """
+        )
+        params.extend([plate_like, like, like, like, like, like])
+
+    normalized_verdict = str(verdict or "").strip().upper()
+    if normalized_verdict:
+        where.append("e.verdict = ?")
+        params.append(normalized_verdict)
+
+    normalized_from = normalize_history_datetime(date_from)
+    if normalized_from:
+        where.append("e.created_at >= ?")
+        params.append(normalized_from)
+
+    normalized_to = normalize_history_datetime(date_to, end_of_range=True)
+    if normalized_to:
+        where.append("e.created_at <= ?")
+        params.append(normalized_to)
+
+    return " AND ".join(where), params
+
+
+def fetch_enforcement_history_rows(
+    site_code: str,
+    *,
+    q: str = "",
+    verdict: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    limit: int = 1000,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    where_sql, params = build_enforcement_history_query(
+        site_code,
+        q=q,
+        verdict=verdict,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    params.extend([limit, offset])
+    with connect() as con:
+        rows = con.execute(
+            f"""
+            SELECT
+              e.id,
+              e.plate,
+              e.verdict,
+              e.verdict_message,
+              e.unit,
+              e.owner_name,
+              e.vehicle_status,
+              e.inspector,
+              e.location,
+              e.memo,
+              e.photo_path,
+              e.lat,
+              e.lng,
+              e.created_at,
+              v.phone,
+              v.building,
+              v.unit_number
+            FROM enforcement_events e
+            LEFT JOIN vehicles v ON v.site_code = e.site_code AND v.plate = e.plate
+            WHERE {where_sql}
+            ORDER BY e.id DESC
+            LIMIT ? OFFSET ?
+            """,
+            params,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def fetch_enforcement_event(site_code: str, event_id: int) -> dict[str, Any] | None:
+    with connect() as con:
+        row = con.execute(
+            """
+            SELECT
+              e.id,
+              e.plate,
+              e.verdict,
+              e.verdict_message,
+              e.unit,
+              e.owner_name,
+              e.vehicle_status,
+              e.inspector,
+              e.location,
+              e.memo,
+              e.photo_path,
+              e.lat,
+              e.lng,
+              e.created_at,
+              v.phone,
+              v.building,
+              v.unit_number
+            FROM enforcement_events e
+            LEFT JOIN vehicles v ON v.site_code = e.site_code AND v.plate = e.plate
+            WHERE e.site_code = ? AND e.id = ?
+            """,
+            (site_code, event_id),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def require_enforcement_event(site_code: str, event_id: int) -> dict[str, Any]:
+    row = fetch_enforcement_event(site_code, event_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="단속 기록을 찾을 수 없습니다.")
+    return row
+
+
 def normalize_new_password(value: str | None, *, required: bool) -> str | None:
     if value is None:
         if required:
@@ -919,18 +1089,115 @@ def user_public_dict(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "username": row["username"],
         "role": row["role"],
         "role_label": ROLE_LABELS.get(row["role"], row["role"]),
+        "can_manage_vehicles": bool(row.get("can_manage_vehicles", 0)),
         "created_at": row["created_at"],
     }
 
 
 def require_existing_user(con, site_code: str, username: str) -> dict[str, Any]:
     row = con.execute(
-        "SELECT site_code, username, role, created_at FROM users WHERE site_code = ? AND username = ?",
+        "SELECT site_code, username, role, COALESCE(can_manage_vehicles, 0) AS can_manage_vehicles, created_at FROM users WHERE site_code = ? AND username = ?",
         (normalize_site_code(site_code), username),
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="해당 사용자를 찾을 수 없습니다.")
     return dict(row)
+
+
+def can_manage_vehicle_registry(request: Request) -> bool:
+    session = require_role(request, VIEW_ROLES)
+    if session.get("r") == "admin":
+        return True
+    site_code = current_site_code(request)
+    with connect() as con:
+        row = con.execute(
+            "SELECT COALESCE(can_manage_vehicles, 0) AS can_manage_vehicles FROM users WHERE site_code = ? AND username = ?",
+            (site_code, session.get("u")),
+        ).fetchone()
+    return bool(row and row["can_manage_vehicles"])
+
+
+def require_vehicle_manager(request: Request) -> dict[str, Any]:
+    session = require_role(request, VIEW_ROLES)
+    if session.get("r") == "admin":
+        return session
+    site_code = current_site_code(request)
+    with connect() as con:
+        row = con.execute(
+            "SELECT COALESCE(can_manage_vehicles, 0) AS can_manage_vehicles FROM users WHERE site_code = ? AND username = ?",
+            (site_code, session.get("u")),
+        ).fetchone()
+    if not row or not row["can_manage_vehicles"]:
+        raise HTTPException(status_code=403, detail="등록차량 DB를 관리할 권한이 없습니다.")
+    return session
+
+
+def vehicle_row_dict(row: dict[str, Any] | Any | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    data = dict(row)
+    data["manual_override"] = bool(data.get("manual_override", 0))
+    return data
+
+
+def vehicle_payload_values(payload: VehicleUpsertRequest) -> dict[str, Any]:
+    plate = normalize_plate(payload.plate)
+    if not plate:
+        raise HTTPException(status_code=400, detail="차량번호를 입력해 주세요.")
+    status = str(payload.status or "active").strip().lower() or "active"
+    return {
+        "plate": plate,
+        "unit": str(payload.unit or "").strip() or None,
+        "building": str(payload.building or "").strip() or None,
+        "unit_number": str(payload.unit_number or "").strip() or None,
+        "owner_name": str(payload.owner_name or "").strip() or None,
+        "phone": str(payload.phone or "").strip() or None,
+        "status": status,
+        "valid_from": str(payload.valid_from or "").strip() or None,
+        "valid_to": str(payload.valid_to or "").strip() or None,
+        "note": str(payload.note or "").strip() or None,
+    }
+
+
+def log_vehicle_change(con, site_code: str, username: str | None, action: str, plate: str | None, before: dict[str, Any] | None, after: dict[str, Any] | None) -> None:
+    con.execute(
+        """
+        INSERT INTO vehicle_change_logs(site_code, username, action, plate, before_json, after_json)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            site_code,
+            username,
+            action,
+            plate,
+            json.dumps(before, ensure_ascii=False, default=str) if before else None,
+            json.dumps(after, ensure_ascii=False, default=str) if after else None,
+        ),
+    )
+
+
+def create_vehicle_backup(con, site_code: str, username: str | None, backup_name: str | None = None) -> dict[str, Any]:
+    rows = [
+        dict(row)
+        for row in con.execute(
+            """
+            SELECT site_code, plate, unit, building, unit_number, owner_name, phone, status, valid_from, valid_to, note, source_file, source_sheet, manual_override, deleted_at, updated_at
+            FROM vehicles
+            WHERE site_code = ?
+            ORDER BY plate
+            """,
+            (site_code,),
+        ).fetchall()
+    ]
+    name = backup_name or f"{site_code}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    cur = con.execute(
+        """
+        INSERT INTO vehicle_backups(site_code, backup_name, vehicles_json, vehicles_count, created_by)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (site_code, name, json.dumps(rows, ensure_ascii=False, default=str), len(rows), username),
+    )
+    return {"id": cur.lastrowid, "backup_name": name, "vehicles_count": len(rows)}
 
 
 def ensure_not_last_admin(con, site_code: str, username: str, *, next_role: str | None = None, deleting: bool = False) -> None:
@@ -976,6 +1243,32 @@ def save_photo_bytes(filename: str | None, payload: bytes, site_code: str) -> st
     return site_upload_url(site_code, name)
 
 
+def save_site_setting_image(filename: str | None, payload: bytes, site_code: str) -> str:
+    if not filename:
+        raise HTTPException(status_code=400, detail="이미지 파일을 선택해 주세요.")
+    if not payload:
+        raise HTTPException(status_code=400, detail="이미지 파일이 비어 있습니다.")
+    suffix = Path(filename).suffix.lower() or ".jpg"
+    if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+        raise HTTPException(status_code=400, detail="이미지는 jpg, png, webp, gif 형식만 사용할 수 있습니다.")
+    target_dir = site_upload_dir(site_code) / "settings"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    name = f"capture-placeholder-{uuid.uuid4().hex}{suffix}"
+    (target_dir / name).write_bytes(payload)
+    return site_upload_url(site_code, f"settings/{name}")
+
+
+def site_settings_dict(site_code: str) -> dict[str, Any]:
+    normalized_site = normalize_site_code(site_code)
+    with connect() as con:
+        row = con.execute("SELECT * FROM site_settings WHERE site_code = ?", (normalized_site,)).fetchone()
+    return {
+        "site_code": normalized_site,
+        "capture_placeholder_image_url": row["capture_placeholder_image_url"] if row else None,
+        "updated_at": row["updated_at"] if row else None,
+    }
+
+
 def cctv_request_dict(row: dict[str, Any] | Any) -> dict[str, Any]:
     data = dict(row)
     start_time = data.get("search_start_time") or data.get("search_time")
@@ -994,6 +1287,16 @@ def require_cctv_request(con, site_code: str, request_id: int) -> dict[str, Any]
     if not row:
         raise HTTPException(status_code=404, detail="CCTV 검색요청을 찾을 수 없습니다.")
     return dict(row)
+
+
+def can_edit_cctv_request(session: dict[str, Any], row: dict[str, Any]) -> bool:
+    username = session.get("u")
+    role = session.get("r")
+    return role in CCTV_ASSIGNMENT_ROLES or row.get("requester_username") == username or row.get("assigned_to") == username
+
+
+def can_delete_cctv_request(session: dict[str, Any], row: dict[str, Any]) -> bool:
+    return session.get("r") in CCTV_ASSIGNMENT_ROLES or row.get("requester_username") == session.get("u")
 
 
 def normalize_cctv_assignee(con, site_code: str, username: str | None) -> str | None:
@@ -1136,6 +1439,7 @@ def field_page(request: Request):
     ensure_ready()
     session = require_role(request, VIEW_ROLES)
     site_code = normalize_site_code(session.get("sc"))
+    can_manage_vehicles = can_manage_vehicle_registry(request)
     return templates.TemplateResponse(
         request=request,
         name="field.html",
@@ -1146,6 +1450,7 @@ def field_page(request: Request):
             "role": session.get("r"),
             "username": session.get("u"),
             "is_admin": session.get("r") == "admin",
+            "can_manage_vehicles": can_manage_vehicles,
             "import_dir": str(site_import_dir(site_code)),
             "ocr_provider": os.getenv("PARKING_OCR_PROVIDER", "tesseract"),
         },
@@ -1161,6 +1466,7 @@ def api_me(request: Request):
         "role": session.get("r"),
         "site_code": normalize_site_code(session.get("sc")),
         "site_name": site_name_for_code(session.get("sc")),
+        "can_manage_vehicles": can_manage_vehicle_registry(request),
     }
 
 
@@ -1299,7 +1605,7 @@ def api_users_list(request: Request, q: str = "", role: str = "", limit: int = 5
     with connect() as con:
         rows = con.execute(
             f"""
-            SELECT site_code, username, role, created_at
+            SELECT site_code, username, role, COALESCE(can_manage_vehicles, 0) AS can_manage_vehicles, created_at
             FROM users
             WHERE {' AND '.join(where)}
             ORDER BY {role_order_case()}, username
@@ -1333,8 +1639,8 @@ def api_users_create(request: Request, payload: UserCreateRequest):
             raise HTTPException(status_code=409, detail="이미 사용 중인 아이디입니다.")
 
         con.execute(
-            "INSERT INTO users(site_code, username, pw_hash, role) VALUES (?, ?, ?, ?)",
-            (site_code, username, pbkdf2_hash(password), role),
+            "INSERT INTO users(site_code, username, pw_hash, role, can_manage_vehicles) VALUES (?, ?, ?, ?, ?)",
+            (site_code, username, pbkdf2_hash(password), role, 1 if payload.can_manage_vehicles else 0),
         )
         row = require_existing_user(con, site_code, username)
         con.commit()
@@ -1368,6 +1674,10 @@ def api_users_update(request: Request, username: str, payload: UserUpdateRequest
         if next_password is not None:
             fields.append("pw_hash = ?")
             values.append(pbkdf2_hash(next_password))
+
+        if payload.can_manage_vehicles is not None:
+            fields.append("can_manage_vehicles = ?")
+            values.append(1 if payload.can_manage_vehicles else 0)
 
         if not fields:
             return user_public_dict(current)
@@ -1587,13 +1897,40 @@ async def api_cctv_request_create(
 @app.patch("/api/cctv/requests/{request_id}")
 def api_cctv_request_update(request: Request, request_id: int, payload: CctvAssignmentRequest):
     ensure_ready()
-    session = require_role(request, CCTV_ASSIGNMENT_ROLES)
+    session = require_role(request, VIEW_ROLES)
     site_code = current_site_code(request)
     with connect() as con:
         current = require_cctv_request(con, site_code, request_id)
+        if not can_edit_cctv_request(session, current):
+            raise HTTPException(status_code=403, detail="이 CCTV 요청을 수정할 권한이 없습니다.")
         fields_set = payload.model_fields_set
         updates: list[str] = []
         values: list[Any] = []
+
+        if "location" in fields_set:
+            updates.append("location = ?")
+            values.append(require_form_text(payload.location, "위치"))
+
+        next_start_time = current.get("search_start_time") or current.get("search_time")
+        next_end_time = current.get("search_end_time") or next_start_time
+        if "search_start_time" in fields_set:
+            next_start_time = require_form_text(payload.search_start_time, "검색 시작 시간")
+        if "search_end_time" in fields_set:
+            next_end_time = require_form_text(payload.search_end_time, "검색 끝 시간")
+        if "search_start_time" in fields_set or "search_end_time" in fields_set:
+            validate_cctv_time_range(str(next_start_time), str(next_end_time))
+            updates.append("search_start_time = ?")
+            values.append(next_start_time)
+            updates.append("search_end_time = ?")
+            values.append(next_end_time)
+
+        if "content" in fields_set:
+            updates.append("content = ?")
+            values.append(require_form_text(payload.content, "요청 내용"))
+
+        assignment_fields = {"assigned_to", "work_weight", "instruction", "status"}
+        if fields_set & assignment_fields and session.get("r") not in CCTV_ASSIGNMENT_ROLES:
+            raise HTTPException(status_code=403, detail="CCTV 배정 정보는 관리자만 수정할 수 있습니다.")
 
         if "assigned_to" in fields_set:
             assignee = normalize_cctv_assignee(con, site_code, payload.assigned_to)
@@ -1635,6 +1972,20 @@ def api_cctv_request_update(request: Request, request_id: int, payload: CctvAssi
     return cctv_request_dict(row)
 
 
+@app.delete("/api/cctv/requests/{request_id}")
+def api_cctv_request_delete(request: Request, request_id: int):
+    ensure_ready()
+    session = require_role(request, VIEW_ROLES)
+    site_code = current_site_code(request)
+    with connect() as con:
+        current = require_cctv_request(con, site_code, request_id)
+        if not can_delete_cctv_request(session, current):
+            raise HTTPException(status_code=403, detail="이 CCTV 요청을 삭제할 권한이 없습니다.")
+        con.execute("DELETE FROM cctv_search_requests WHERE site_code = ? AND id = ?", (site_code, request_id))
+        con.commit()
+    return {"deleted": True, "id": request_id}
+
+
 @app.get("/api/registry/check", response_model=CheckResponse)
 def api_registry_check(request: Request, plate: str):
     require_role(request, VIEW_ROLES)
@@ -1655,6 +2006,7 @@ def api_registry_search(request: Request, q: str = "", limit: int = 20):
             SELECT plate, unit, building, unit_number, owner_name, phone, status, valid_from, valid_to, note, source_file, source_sheet
             FROM vehicles
             WHERE site_code = ?
+              AND deleted_at IS NULL
               AND (
                 plate LIKE ?
                 OR COALESCE(unit, '') LIKE ?
@@ -1677,7 +2029,21 @@ def api_registry_status(request: Request):
     site_code = current_site_code(request)
     source_dir = site_import_dir(site_code)
     with connect() as con:
-        vehicle_count = con.execute("SELECT COUNT(*) AS cnt FROM vehicles WHERE site_code = ?", (site_code,)).fetchone()["cnt"]
+        vehicle_count = con.execute("SELECT COUNT(*) AS cnt FROM vehicles WHERE site_code = ? AND deleted_at IS NULL", (site_code,)).fetchone()["cnt"]
+        manual_count = con.execute("SELECT COUNT(*) AS cnt FROM vehicles WHERE site_code = ? AND deleted_at IS NULL AND COALESCE(manual_override, 0) = 1", (site_code,)).fetchone()["cnt"]
+        backups = [
+            dict(row)
+            for row in con.execute(
+                """
+                SELECT id, backup_name, vehicles_count, created_by, created_at
+                FROM vehicle_backups
+                WHERE site_code = ?
+                ORDER BY id DESC
+                LIMIT 5
+                """,
+                (site_code,),
+            ).fetchall()
+        ]
         last_run = con.execute(
             """
             SELECT id, source_dir, files_count, rows_count, imported_at, status, message
@@ -1692,8 +2058,10 @@ def api_registry_status(request: Request):
         "site_code": site_code,
         "site_name": site_name_for_code(site_code),
         "vehicle_count": vehicle_count,
+        "manual_vehicle_count": manual_count,
         "import_dir": str(source_dir),
         "import_files": describe_excel_files(source_dir),
+        "backups": backups,
         "ocr_provider": os.getenv("PARKING_OCR_PROVIDER", "tesseract"),
         "ocr_learning": get_learning_status(site_code),
         "last_sync": dict(last_run) if last_run else None,
@@ -1701,12 +2069,18 @@ def api_registry_status(request: Request):
 
 
 @app.post("/api/registry/sync")
-def api_registry_sync(request: Request):
+def api_registry_sync(request: Request, payload: RegistrySyncRequest | None = None):
     ensure_ready()
     require_role(request, {"admin"})
     site_code = current_site_code(request)
+    preserve_manual = True if payload is None else payload.preserve_manual
     try:
-        return sync_registry_from_dir(site_import_dir(site_code), site_code)
+        with connect() as con:
+            backup = create_vehicle_backup(con, site_code, read_session(request).get("u"), f"{site_code}-before-sync-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
+            con.commit()
+        result = sync_registry_from_dir(site_import_dir(site_code), site_code, preserve_manual=preserve_manual)
+        result["backup"] = backup
+        return result
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -1719,6 +2093,7 @@ async def api_registry_upload(request: Request, files: list[UploadFile] = File(.
     require_role(request, {"admin"})
     site_code = current_site_code(request)
     source_dir = site_import_dir(site_code)
+    preserve_manual = str(request.query_params.get("preserve_manual", "1")).strip().lower() not in {"0", "false", "no", "off"}
 
     if not files:
         raise HTTPException(status_code=400, detail="업로드할 Excel 파일을 선택해 주세요.")
@@ -1739,7 +2114,11 @@ async def api_registry_upload(request: Request, files: list[UploadFile] = File(.
                 raise ValueError(f"{display_name}: {exc}") from exc
             uploaded_paths.append(uploaded)
             saved_names.add(uploaded.name)
-        sync_result = sync_registry_from_dir(source_dir, site_code)
+        with connect() as con:
+            backup = create_vehicle_backup(con, site_code, read_session(request).get("u"), f"{site_code}-before-upload-sync-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
+            con.commit()
+        sync_result = sync_registry_from_dir(source_dir, site_code, preserve_manual=preserve_manual)
+        sync_result["backup"] = backup
     except ValueError as exc:
         for path in uploaded_paths:
             if path.exists():
@@ -1762,6 +2141,35 @@ async def api_registry_upload(request: Request, files: list[UploadFile] = File(.
         "import_dir": str(source_dir),
         "sync": sync_result,
     }
+
+
+@app.get("/api/site/settings")
+def api_site_settings(request: Request):
+    ensure_ready()
+    require_role(request, VIEW_ROLES)
+    return site_settings_dict(current_site_code(request))
+
+
+@app.post("/api/site/settings/capture-placeholder")
+async def api_site_settings_capture_placeholder(request: Request, image: UploadFile = File(...)):
+    ensure_ready()
+    require_role(request, {"admin"})
+    site_code = current_site_code(request)
+    payload = await image.read()
+    image_url = save_site_setting_image(image.filename, payload, site_code)
+    with connect() as con:
+        con.execute(
+            """
+            INSERT INTO site_settings(site_code, capture_placeholder_image_url, updated_at)
+            VALUES (?, ?, datetime('now'))
+            ON CONFLICT(site_code) DO UPDATE SET
+              capture_placeholder_image_url = excluded.capture_placeholder_image_url,
+              updated_at = datetime('now')
+            """,
+            (site_code, image_url),
+        )
+        con.commit()
+    return site_settings_dict(site_code)
 
 
 @app.post("/api/ocr/scan")
@@ -1870,6 +2278,260 @@ def api_enforcement_recent(request: Request, limit: int = 20):
     return [dict(row) for row in rows]
 
 
+@app.get("/api/registry/vehicles")
+def api_registry_vehicles(request: Request, q: str = ""):
+    ensure_ready()
+    require_vehicle_manager(request)
+    site_code = current_site_code(request)
+    query = str(q or "").strip()
+    if not query:
+        return {"items": [], "can_manage": True, "message": "차량번호, 동호수, 차주 또는 연락처를 입력해 조회해 주세요."}
+
+    where = ["site_code = ?", "deleted_at IS NULL"]
+    params: list[Any] = [site_code]
+    normalized = normalize_plate(query)
+    like = f"%{query}%"
+    plate_like = f"%{normalized or query}%"
+    where.append(
+        """
+        (
+          plate LIKE ?
+          OR COALESCE(unit, '') LIKE ?
+          OR COALESCE(building, '') LIKE ?
+          OR COALESCE(unit_number, '') LIKE ?
+          OR COALESCE(owner_name, '') LIKE ?
+          OR COALESCE(phone, '') LIKE ?
+        )
+        """
+    )
+    params.extend([plate_like, like, like, like, like, like])
+    exact_plate = normalized or query
+    params.extend([exact_plate, exact_plate])
+    with connect() as con:
+        rows = con.execute(
+            f"""
+            SELECT site_code, plate, unit, building, unit_number, owner_name, phone, status, valid_from, valid_to, note, source_file, source_sheet, manual_override, deleted_at, updated_at
+            FROM vehicles
+            WHERE {' AND '.join(where)}
+            ORDER BY
+              CASE
+                WHEN plate = ? THEN 0
+                WHEN plate LIKE ? THEN 1
+                ELSE 2
+              END,
+              manual_override DESC,
+              updated_at DESC,
+              plate
+            LIMIT 1
+            """,
+            params,
+        ).fetchall()
+    return {"items": [vehicle_row_dict(row) for row in rows], "can_manage": True}
+
+
+@app.post("/api/registry/vehicles")
+def api_registry_vehicle_create(request: Request, payload: VehicleUpsertRequest):
+    ensure_ready()
+    session = require_vehicle_manager(request)
+    site_code = current_site_code(request)
+    values = vehicle_payload_values(payload)
+    with connect() as con:
+        exists = con.execute("SELECT * FROM vehicles WHERE site_code = ? AND plate = ?", (site_code, values["plate"])).fetchone()
+        if exists and not exists["deleted_at"]:
+            raise HTTPException(status_code=409, detail="이미 등록된 차량번호입니다.")
+        before = vehicle_row_dict(exists)
+        con.execute(
+            """
+            INSERT INTO vehicles(site_code, plate, unit, building, unit_number, owner_name, phone, status, valid_from, valid_to, note, source_file, source_sheet, manual_override, deleted_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', 'manual', 1, NULL, datetime('now'))
+            ON CONFLICT(site_code, plate) DO UPDATE SET
+              unit = excluded.unit,
+              building = excluded.building,
+              unit_number = excluded.unit_number,
+              owner_name = excluded.owner_name,
+              phone = excluded.phone,
+              status = excluded.status,
+              valid_from = excluded.valid_from,
+              valid_to = excluded.valid_to,
+              note = excluded.note,
+              source_file = 'manual',
+              source_sheet = 'manual',
+              manual_override = 1,
+              deleted_at = NULL,
+              updated_at = datetime('now')
+            """,
+            (
+                site_code,
+                values["plate"],
+                values["unit"],
+                values["building"],
+                values["unit_number"],
+                values["owner_name"],
+                values["phone"],
+                values["status"],
+                values["valid_from"],
+                values["valid_to"],
+                values["note"],
+            ),
+        )
+        row = con.execute("SELECT * FROM vehicles WHERE site_code = ? AND plate = ?", (site_code, values["plate"])).fetchone()
+        after = vehicle_row_dict(row)
+        log_vehicle_change(con, site_code, session.get("u"), "create", values["plate"], before, after)
+        con.commit()
+    return after
+
+
+@app.patch("/api/registry/vehicles/{plate}")
+def api_registry_vehicle_update(request: Request, plate: str, payload: VehicleUpsertRequest):
+    ensure_ready()
+    session = require_vehicle_manager(request)
+    site_code = current_site_code(request)
+    current_plate = normalize_plate(plate)
+    values = vehicle_payload_values(payload)
+    with connect() as con:
+        current = con.execute("SELECT * FROM vehicles WHERE site_code = ? AND plate = ? AND deleted_at IS NULL", (site_code, current_plate)).fetchone()
+        if not current:
+            raise HTTPException(status_code=404, detail="등록차량을 찾을 수 없습니다.")
+        before = vehicle_row_dict(current)
+        if values["plate"] != current_plate:
+            duplicate = con.execute("SELECT 1 FROM vehicles WHERE site_code = ? AND plate = ? AND deleted_at IS NULL", (site_code, values["plate"])).fetchone()
+            if duplicate:
+                raise HTTPException(status_code=409, detail="변경할 차량번호가 이미 존재합니다.")
+        con.execute(
+            """
+            UPDATE vehicles
+            SET plate = ?,
+                unit = ?,
+                building = ?,
+                unit_number = ?,
+                owner_name = ?,
+                phone = ?,
+                status = ?,
+                valid_from = ?,
+                valid_to = ?,
+                note = ?,
+                manual_override = 1,
+                updated_at = datetime('now')
+            WHERE site_code = ? AND plate = ?
+            """,
+            (
+                values["plate"],
+                values["unit"],
+                values["building"],
+                values["unit_number"],
+                values["owner_name"],
+                values["phone"],
+                values["status"],
+                values["valid_from"],
+                values["valid_to"],
+                values["note"],
+                site_code,
+                current_plate,
+            ),
+        )
+        row = con.execute("SELECT * FROM vehicles WHERE site_code = ? AND plate = ?", (site_code, values["plate"])).fetchone()
+        after = vehicle_row_dict(row)
+        log_vehicle_change(con, site_code, session.get("u"), "update", values["plate"], before, after)
+        con.commit()
+    return after
+
+
+@app.delete("/api/registry/vehicles/{plate}")
+def api_registry_vehicle_delete(request: Request, plate: str):
+    ensure_ready()
+    session = require_vehicle_manager(request)
+    site_code = current_site_code(request)
+    normalized_plate = normalize_plate(plate)
+    with connect() as con:
+        current = con.execute("SELECT * FROM vehicles WHERE site_code = ? AND plate = ? AND deleted_at IS NULL", (site_code, normalized_plate)).fetchone()
+        if not current:
+            raise HTTPException(status_code=404, detail="등록차량을 찾을 수 없습니다.")
+        before = vehicle_row_dict(current)
+        con.execute(
+            "UPDATE vehicles SET deleted_at = datetime('now'), manual_override = 1, updated_at = datetime('now') WHERE site_code = ? AND plate = ?",
+            (site_code, normalized_plate),
+        )
+        log_vehicle_change(con, site_code, session.get("u"), "delete", normalized_plate, before, None)
+        con.commit()
+    return {"deleted": True, "plate": normalized_plate}
+
+
+@app.get("/api/registry/backups")
+def api_registry_backups(request: Request, limit: int = 20):
+    ensure_ready()
+    require_vehicle_manager(request)
+    site_code = current_site_code(request)
+    limit = min(max(limit, 1), 100)
+    with connect() as con:
+        rows = con.execute(
+            """
+            SELECT id, backup_name, vehicles_count, created_by, created_at
+            FROM vehicle_backups
+            WHERE site_code = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (site_code, limit),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.post("/api/registry/backups")
+def api_registry_backup_create(request: Request):
+    ensure_ready()
+    session = require_vehicle_manager(request)
+    site_code = current_site_code(request)
+    with connect() as con:
+        backup = create_vehicle_backup(con, site_code, session.get("u"))
+        con.commit()
+    return backup
+
+
+@app.post("/api/registry/backups/{backup_id}/restore")
+def api_registry_backup_restore(request: Request, backup_id: int):
+    ensure_ready()
+    session = require_vehicle_manager(request)
+    site_code = current_site_code(request)
+    with connect() as con:
+        backup_row = con.execute(
+            "SELECT * FROM vehicle_backups WHERE site_code = ? AND id = ?",
+            (site_code, backup_id),
+        ).fetchone()
+        if not backup_row:
+            raise HTTPException(status_code=404, detail="백업을 찾을 수 없습니다.")
+        before_backup = create_vehicle_backup(con, site_code, session.get("u"), f"{site_code}-before-restore-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
+        rows = json.loads(backup_row["vehicles_json"] or "[]")
+        con.execute("DELETE FROM vehicles WHERE site_code = ?", (site_code,))
+        for row in rows:
+            con.execute(
+                """
+                INSERT INTO vehicles(site_code, plate, unit, building, unit_number, owner_name, phone, status, valid_from, valid_to, note, source_file, source_sheet, manual_override, deleted_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
+                """,
+                (
+                    site_code,
+                    row.get("plate"),
+                    row.get("unit"),
+                    row.get("building"),
+                    row.get("unit_number"),
+                    row.get("owner_name"),
+                    row.get("phone"),
+                    row.get("status") or "active",
+                    row.get("valid_from"),
+                    row.get("valid_to"),
+                    row.get("note"),
+                    row.get("source_file"),
+                    row.get("source_sheet"),
+                    1 if row.get("manual_override") else 0,
+                    row.get("deleted_at"),
+                    row.get("updated_at"),
+                ),
+            )
+        log_vehicle_change(con, site_code, session.get("u"), "restore", None, {"backup_before_restore": before_backup}, {"restored_backup_id": backup_id, "vehicles_count": len(rows)})
+        con.commit()
+    return {"restored": True, "backup_id": backup_id, "vehicles_count": len(rows), "backup_before_restore": before_backup}
+
+
 @app.get("/api/enforcement/history")
 def api_enforcement_history(
     request: Request,
@@ -1886,55 +2548,15 @@ def api_enforcement_history(
     limit = min(max(limit, 1), 50)
     offset = max(offset, 0)
 
-    where = ["site_code = ?"]
-    params: list[Any] = [site_code]
-
-    query = str(q or "").strip()
-    if query:
-        normalized_plate = normalize_plate(query)
-        like = f"%{query}%"
-        plate_like = f"%{normalized_plate or query}%"
-        where.append(
-            """
-            (
-              plate LIKE ?
-              OR COALESCE(unit, '') LIKE ?
-              OR COALESCE(owner_name, '') LIKE ?
-              OR COALESCE(inspector, '') LIKE ?
-              OR COALESCE(location, '') LIKE ?
-              OR COALESCE(memo, '') LIKE ?
-            )
-            """
-        )
-        params.extend([plate_like, like, like, like, like, like])
-
-    normalized_verdict = str(verdict or "").strip().upper()
-    if normalized_verdict:
-        where.append("verdict = ?")
-        params.append(normalized_verdict)
-
-    normalized_from = normalize_history_datetime(date_from)
-    if normalized_from:
-        where.append("created_at >= ?")
-        params.append(normalized_from)
-
-    normalized_to = normalize_history_datetime(date_to, end_of_range=True)
-    if normalized_to:
-        where.append("created_at <= ?")
-        params.append(normalized_to)
-
-    sql = f"""
-        SELECT id, plate, verdict, verdict_message, unit, owner_name, inspector, location, memo, photo_path, created_at
-        FROM enforcement_events
-        WHERE {' AND '.join(where)}
-        ORDER BY id DESC
-        LIMIT ? OFFSET ?
-    """
-    params.extend([limit + 1, offset])
-
-    with connect() as con:
-        rows = [dict(row) for row in con.execute(sql, params).fetchall()]
-
+    rows = fetch_enforcement_history_rows(
+        site_code,
+        q=q,
+        verdict=verdict,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit + 1,
+        offset=offset,
+    )
     has_more = len(rows) > limit
     items = rows[:limit]
     return {
@@ -1944,3 +2566,198 @@ def api_enforcement_history(
         "next_offset": offset + len(items) if has_more else None,
         "has_more": has_more,
     }
+
+
+@app.patch("/api/enforcement/events/{event_id}")
+def api_enforcement_event_update(request: Request, event_id: int, payload: EnforcementEventUpdateRequest):
+    ensure_ready()
+    require_role(request, ENFORCEMENT_WRITE_ROLES)
+    site_code = current_site_code(request)
+    current = require_enforcement_event(site_code, event_id)
+
+    next_plate = current["plate"]
+    if "plate" in payload.model_fields_set:
+        normalized_plate = normalize_plate(payload.plate or "")
+        if not normalized_plate:
+            raise HTTPException(status_code=400, detail="차량번호를 입력해 주세요.")
+        next_plate = normalized_plate
+
+    check = build_check_response(site_code, next_plate)
+    values = {
+        "plate": check.plate,
+        "verdict": check.verdict,
+        "verdict_message": check.message,
+        "unit": check.unit,
+        "owner_name": check.owner_name,
+        "vehicle_status": check.status,
+        "inspector": current.get("inspector"),
+        "location": current.get("location"),
+        "memo": current.get("memo"),
+    }
+    if "inspector" in payload.model_fields_set:
+        values["inspector"] = str(payload.inspector or "").strip() or None
+    if "location" in payload.model_fields_set:
+        values["location"] = str(payload.location or "").strip() or None
+    if "memo" in payload.model_fields_set:
+        values["memo"] = str(payload.memo or "").strip() or None
+
+    with connect() as con:
+        con.execute(
+            """
+            UPDATE enforcement_events
+            SET plate = ?,
+                verdict = ?,
+                verdict_message = ?,
+                unit = ?,
+                owner_name = ?,
+                vehicle_status = ?,
+                inspector = ?,
+                location = ?,
+                memo = ?
+            WHERE site_code = ? AND id = ?
+            """,
+            (
+                values["plate"],
+                values["verdict"],
+                values["verdict_message"],
+                values["unit"],
+                values["owner_name"],
+                values["vehicle_status"],
+                values["inspector"],
+                values["location"],
+                values["memo"],
+                site_code,
+                event_id,
+            ),
+        )
+        con.commit()
+    return require_enforcement_event(site_code, event_id)
+
+
+@app.delete("/api/enforcement/events/{event_id}")
+def api_enforcement_event_delete(request: Request, event_id: int):
+    ensure_ready()
+    require_role(request, ENFORCEMENT_WRITE_ROLES)
+    site_code = current_site_code(request)
+    require_enforcement_event(site_code, event_id)
+    with connect() as con:
+        con.execute("DELETE FROM enforcement_events WHERE site_code = ? AND id = ?", (site_code, event_id))
+        con.commit()
+    return {"deleted": True, "id": event_id}
+
+
+@app.get("/api/enforcement/export/rows")
+def api_enforcement_export_rows(
+    request: Request,
+    q: str = "",
+    verdict: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    limit: int = 1000,
+):
+    ensure_ready()
+    require_role(request, VIEW_ROLES)
+    site_code = current_site_code(request)
+    limit = min(max(limit, 1), 5000)
+    rows = fetch_enforcement_history_rows(
+        site_code,
+        q=q,
+        verdict=verdict,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit + 1,
+        offset=0,
+    )
+    return {
+        "site_code": site_code,
+        "site_name": site_name_for_code(site_code),
+        "items": rows[:limit],
+        "limit": limit,
+        "truncated": len(rows) > limit,
+    }
+
+
+@app.get("/api/enforcement/export.xlsx")
+def api_enforcement_export_xlsx(
+    request: Request,
+    q: str = "",
+    verdict: str = "",
+    date_from: str = "",
+    date_to: str = "",
+):
+    ensure_ready()
+    require_role(request, VIEW_ROLES)
+    site_code = current_site_code(request)
+    site_name = site_name_for_code(site_code)
+    rows = fetch_enforcement_history_rows(
+        site_code,
+        q=q,
+        verdict=verdict,
+        date_from=date_from,
+        date_to=date_to,
+        limit=5000,
+        offset=0,
+    )
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "불법주차단속대장"
+    sheet.merge_cells("A1:L1")
+    sheet["A1"] = "불법주차단속대장"
+    sheet["A1"].font = Font(size=18, bold=True)
+    sheet["A1"].alignment = Alignment(horizontal="center", vertical="center")
+    sheet["A2"] = f"아파트: {site_name} ({site_code})"
+    sheet["I2"] = f"출력일: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+
+    headers = ["장소(층)", "단속시간", "차량번호", "위반내용", "연락처&위치", "경고장", "문자", "통화", "동호수", "차주", "단속자", "판정"]
+    header_row = 4
+    thin = Side(style="thin", color="8C959F")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    header_fill = PatternFill("solid", fgColor="EAF1EE")
+
+    for col_index, header in enumerate(headers, start=1):
+        cell = sheet.cell(row=header_row, column=col_index, value=header)
+        cell.font = Font(bold=True)
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = border
+
+    for row_index, item in enumerate(rows, start=header_row + 1):
+        contact_location = " / ".join(part for part in [item.get("phone"), item.get("location")] if part)
+        values = [
+            item.get("location") or "",
+            str(item.get("created_at") or "").replace("T", " ")[:16],
+            item.get("plate") or "",
+            item.get("memo") or item.get("verdict_message") or "",
+            contact_location,
+            "",
+            "",
+            "",
+            item.get("unit") or "",
+            item.get("owner_name") or "",
+            item.get("inspector") or "",
+            item.get("verdict") or "",
+        ]
+        for col_index, value in enumerate(values, start=1):
+            cell = sheet.cell(row=row_index, column=col_index, value=value)
+            cell.alignment = Alignment(horizontal="center" if col_index in {2, 3, 6, 7, 8, 12} else "left", vertical="center", wrap_text=True)
+            cell.border = border
+
+    widths = [18, 18, 16, 28, 28, 10, 10, 10, 16, 16, 14, 12]
+    for col_index, width in enumerate(widths, start=1):
+        sheet.column_dimensions[get_column_letter(col_index)].width = width
+    sheet.freeze_panes = "A5"
+    sheet.page_setup.orientation = "landscape"
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 0
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+
+    payload = BytesIO()
+    workbook.save(payload)
+    payload.seek(0)
+    filename = f"불법주차단속대장_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+    return Response(
+        content=payload.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )

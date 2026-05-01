@@ -44,6 +44,10 @@ def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(DB_PATH, factory=ClosingConnection)
     con.row_factory = sqlite3.Row
+    con.execute("PRAGMA busy_timeout = 5000")
+    con.execute("PRAGMA foreign_keys = ON")
+    con.execute("PRAGMA synchronous = NORMAL")
+    con.execute("PRAGMA temp_store = MEMORY")
     return con
 
 
@@ -81,6 +85,7 @@ def create_users_table(con: sqlite3.Connection, table_name: str = "users") -> No
           username TEXT NOT NULL,
           pw_hash TEXT NOT NULL,
           role TEXT NOT NULL,
+          can_manage_vehicles INTEGER NOT NULL DEFAULT 0,
           created_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
         """
@@ -193,6 +198,63 @@ def create_cctv_request_indexes(con: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_cctv_requests_site_assignee
         ON cctv_search_requests(site_code, assigned_to)
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_cctv_requests_site_active_order
+        ON cctv_search_requests(site_code, status, work_weight, search_start_time, created_at)
+        """
+    )
+
+
+def create_core_query_indexes(con: sqlite3.Connection) -> None:
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_vehicles_site_deleted_updated
+        ON vehicles(site_code, deleted_at, updated_at)
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_vehicles_site_deleted_unit
+        ON vehicles(site_code, deleted_at, unit)
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_vehicles_site_deleted_owner
+        ON vehicles(site_code, deleted_at, owner_name)
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_vehicles_site_deleted_phone
+        ON vehicles(site_code, deleted_at, phone)
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_enforcement_site_id
+        ON enforcement_events(site_code, id)
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_enforcement_site_verdict_id
+        ON enforcement_events(site_code, verdict, id)
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_enforcement_site_plate_id
+        ON enforcement_events(site_code, plate, id)
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_import_runs_site_id
+        ON import_runs(site_code, id)
         """
     )
 
@@ -338,6 +400,55 @@ def ensure_vehicle_schema(con: sqlite3.Connection) -> None:
         con.execute("ALTER TABLE vehicles ADD COLUMN building TEXT")
     if "unit_number" not in columns:
         con.execute("ALTER TABLE vehicles ADD COLUMN unit_number TEXT")
+    if "manual_override" not in columns:
+        con.execute("ALTER TABLE vehicles ADD COLUMN manual_override INTEGER NOT NULL DEFAULT 0")
+    if "deleted_at" not in columns:
+        con.execute("ALTER TABLE vehicles ADD COLUMN deleted_at TEXT")
+
+
+def ensure_vehicle_management_schema(con: sqlite3.Connection) -> None:
+    if "can_manage_vehicles" not in table_columns(con, "users"):
+        con.execute("ALTER TABLE users ADD COLUMN can_manage_vehicles INTEGER NOT NULL DEFAULT 0")
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vehicle_backups (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_code TEXT NOT NULL,
+          backup_name TEXT NOT NULL,
+          vehicles_json TEXT NOT NULL,
+          vehicles_count INTEGER NOT NULL DEFAULT 0,
+          created_by TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vehicle_change_logs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_code TEXT NOT NULL,
+          username TEXT,
+          action TEXT NOT NULL,
+          plate TEXT,
+          before_json TEXT,
+          after_json TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_vehicle_backups_site_created
+        ON vehicle_backups(site_code, created_at)
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_vehicle_change_logs_site_created
+        ON vehicle_change_logs(site_code, created_at)
+        """
+    )
+    create_core_query_indexes(con)
 
 
 def init_db() -> None:
@@ -346,10 +457,12 @@ def init_db() -> None:
     with connect() as con:
         con.executescript(schema_sql)
         ensure_vehicle_schema(con)
+        ensure_vehicle_management_schema(con)
         ensure_site_schema(con)
         ensure_billing_schema(con)
         ensure_cctv_request_schema(con)
         ensure_user_role_schema(con)
+        create_core_query_indexes(con)
         ensure_billing_schema(con)
         con.commit()
 

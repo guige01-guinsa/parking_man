@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS vehicles (
   note TEXT,
   source_file TEXT,
   source_sheet TEXT,
+  manual_override INTEGER NOT NULL DEFAULT 0,
+  deleted_at TEXT,
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (site_code, plate)
 );
@@ -93,6 +95,28 @@ CREATE TABLE IF NOT EXISTS users (
   username TEXT NOT NULL,
   pw_hash TEXT NOT NULL,
   role TEXT NOT NULL,
+  can_manage_vehicles INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS vehicle_backups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  site_code TEXT NOT NULL,
+  backup_name TEXT NOT NULL,
+  vehicles_json TEXT NOT NULL,
+  vehicles_count INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS vehicle_change_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  site_code TEXT NOT NULL,
+  username TEXT,
+  action TEXT NOT NULL,
+  plate TEXT,
+  before_json TEXT,
+  after_json TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -104,6 +128,12 @@ CREATE TABLE IF NOT EXISTS site_billing (
   current_period_ends_at TEXT,
   payment_provider TEXT NOT NULL DEFAULT 'manual',
   external_customer_id TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS site_settings (
+  site_code TEXT PRIMARY KEY,
+  capture_placeholder_image_url TEXT,
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -139,13 +169,19 @@ CREATE TABLE IF NOT EXISTS google_play_purchases (
 
 CREATE INDEX IF NOT EXISTS idx_vehicles_site_plate ON vehicles(site_code, plate);
 CREATE INDEX IF NOT EXISTS idx_enforcement_site_created_at ON enforcement_events(site_code, created_at);
+CREATE INDEX IF NOT EXISTS idx_enforcement_site_id ON enforcement_events(site_code, id);
+CREATE INDEX IF NOT EXISTS idx_enforcement_site_verdict_id ON enforcement_events(site_code, verdict, id);
+CREATE INDEX IF NOT EXISTS idx_enforcement_site_plate_id ON enforcement_events(site_code, plate, id);
 CREATE INDEX IF NOT EXISTS idx_cctv_requests_site_requester ON cctv_search_requests(site_code, requester_username);
 CREATE INDEX IF NOT EXISTS idx_cctv_requests_site_assignee ON cctv_search_requests(site_code, assigned_to);
 CREATE INDEX IF NOT EXISTS idx_import_runs_site_imported_at ON import_runs(site_code, imported_at);
+CREATE INDEX IF NOT EXISTS idx_import_runs_site_id ON import_runs(site_code, id);
 CREATE INDEX IF NOT EXISTS idx_ocr_feedback_site_created_at ON ocr_feedback(site_code, created_at);
 CREATE INDEX IF NOT EXISTS idx_ocr_feedback_site_raw_key ON ocr_feedback(site_code, raw_key);
 CREATE INDEX IF NOT EXISTS idx_ocr_feedback_site_suggested ON ocr_feedback(site_code, suggested_plate);
 CREATE INDEX IF NOT EXISTS idx_ocr_feedback_site_corrected ON ocr_feedback(site_code, corrected_plate);
 CREATE INDEX IF NOT EXISTS idx_sites_created_at ON sites(created_at);
+CREATE INDEX IF NOT EXISTS idx_vehicle_backups_site_created ON vehicle_backups(site_code, created_at);
+CREATE INDEX IF NOT EXISTS idx_vehicle_change_logs_site_created ON vehicle_change_logs(site_code, created_at);
 CREATE INDEX IF NOT EXISTS idx_billing_inquiries_site_created_at ON billing_inquiries(site_code, created_at);
 CREATE INDEX IF NOT EXISTS idx_google_play_purchases_site_verified ON google_play_purchases(site_code, verified_at);
