@@ -695,11 +695,16 @@ summary:focus-visible {
   min-height: 320px;
   align-content: center;
   background-position: center;
+  background-repeat: no-repeat;
   background-size: cover;
 }
 
 .preview-placeholder.has-custom-image {
   color: #24313a;
+}
+
+.preview-placeholder.has-default-image {
+  background-size: min(58%, 260px) auto;
 }
 
 .preview-placeholder strong {

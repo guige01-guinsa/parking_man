@@ -5,6 +5,7 @@ const currentUsername = document.body.dataset.username || "";
 const currentRole = document.body.dataset.role || "";
 const currentCanManageVehicles = document.body.dataset.canManageVehicles === "1";
 const apiUrl = (path) => `${rootPath}${path}`;
+const defaultCapturePlaceholderImage = apiUrl("/static/parking-app-icon.png");
 
 const photoInput = document.getElementById("photo");
 const photoPreview = document.getElementById("photo-preview");
@@ -425,8 +426,10 @@ function updatePreview(file) {
 function setCapturePlaceholderImage(imageUrl) {
   const url = String(imageUrl || "").trim();
   if (!previewPlaceholder) return;
-  previewPlaceholder.style.backgroundImage = url ? `linear-gradient(rgba(255,255,255,0.76), rgba(255,255,255,0.82)), url("${url.replaceAll('"', "%22")}")` : "";
+  const backgroundUrl = url || defaultCapturePlaceholderImage;
+  previewPlaceholder.style.backgroundImage = `linear-gradient(rgba(255,255,255,0.68), rgba(255,255,255,0.76)), url("${backgroundUrl.replaceAll('"', "%22")}")`;
   previewPlaceholder.classList.toggle("has-custom-image", Boolean(url));
+  previewPlaceholder.classList.toggle("has-default-image", !url);
 }
 
 function updateCaptureLimitState() {
@@ -2275,6 +2278,7 @@ hydrateFields();
 syncQuickMemoState();
 renderRegistrySelection();
 renderCapturePlaceholderSelection();
+setCapturePlaceholderImage("");
 updateCaptureLimitState();
 renderCandidates([]);
 renderIdleVerdict();
