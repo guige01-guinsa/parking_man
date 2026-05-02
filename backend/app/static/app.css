@@ -1220,8 +1220,89 @@ summary:focus-visible {
 
 .log-panel,
 .cctv-panel,
+.contact-panel,
 .admin-panel {
   margin-top: 18px;
+}
+
+.contact-toolbar {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr) minmax(90px, auto);
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.contact-form-grid {
+  display: grid;
+  grid-template-columns: 140px repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(31, 36, 40, 0.04);
+}
+
+.contact-form-wide {
+  grid-column: span 2;
+}
+
+.contact-favorite-field,
+.contact-row-favorite {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  align-self: stretch;
+  align-items: center;
+}
+
+.contact-favorite-field input,
+.contact-row-favorite input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+
+.contact-list {
+  margin-top: 14px;
+}
+
+.contact-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.contact-phone-block {
+  max-width: 100%;
+}
+
+.contact-memo {
+  line-height: 1.5;
+}
+
+.contact-edit-grid {
+  display: grid;
+  grid-template-columns: 0.9fr 1fr 1fr 1fr;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(31, 36, 40, 0.08);
+}
+
+.contact-edit-wide {
+  grid-column: span 2;
+}
+
+.contact-edit-grid label {
+  display: grid;
+  gap: 6px;
+}
+
+.contact-edit-grid span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .cctv-grid {
@@ -1833,6 +1914,8 @@ summary:focus-visible {
 
   .field-grid,
   .meta-list,
+  .contact-form-grid,
+  .contact-edit-grid,
   .cctv-assignment-grid,
   .user-form-grid,
   .billing-usage-grid,
@@ -1852,6 +1935,16 @@ summary:focus-visible {
     grid-template-columns: minmax(0, 1fr) minmax(72px, auto);
   }
 
+  .contact-toolbar {
+    grid-template-columns: 1fr minmax(0, 1.5fr) minmax(72px, auto);
+    gap: 8px;
+  }
+
+  .contact-form-wide,
+  .contact-edit-wide {
+    grid-column: 1 / -1;
+  }
+
   .history-filter-actions {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1864,6 +1957,7 @@ summary:focus-visible {
   }
 
   .cctv-edit-grid,
+  .contact-edit-grid,
   .cctv-assignment-grid {
     grid-template-columns: 1fr;
     gap: 8px;
@@ -2007,6 +2101,9 @@ summary:focus-visible {
   .guide-upload-row,
   .history-filter-actions,
   .enforcement-edit-grid,
+  .contact-toolbar,
+  .contact-form-grid,
+  .contact-edit-grid,
   .cctv-edit-grid,
   .field-grid,
   .meta-list,
@@ -2036,6 +2133,9 @@ summary:focus-visible {
   .guide-upload-row,
   .history-filter-actions,
   .enforcement-edit-grid,
+  .contact-toolbar,
+  .contact-form-grid,
+  .contact-edit-grid,
   .cctv-edit-grid,
   .field-grid,
   .meta-list,

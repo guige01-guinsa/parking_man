@@ -272,6 +272,60 @@
       </div>
     </section>
 
+    <section class="panel contact-panel mobile-tab-panel" data-mobile-tab-panel="contacts">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Quick Contacts</p>
+          <h3>연락처 등록관리</h3>
+        </div>
+        <button id="contact-refresh-btn" type="button" class="ghost-btn">새로고침</button>
+      </div>
+      <div class="contact-toolbar">
+        <select id="contact-category-filter" aria-label="연락처 분류">
+          <option value="">전체</option>
+          <option value="internal">사내</option>
+          <option value="public">공공기관</option>
+          <option value="vendor">업체</option>
+        </select>
+        <input id="contact-query" type="text" placeholder="이름, 전화번호, 담당업무">
+        <button id="contact-search-btn" type="button" class="secondary-btn">검색</button>
+      </div>
+      {% if is_admin %}
+      <form id="contact-form" class="contact-form-grid">
+        <label>
+          <span>분류</span>
+          <select id="contact-category" required>
+            <option value="internal">사내</option>
+            <option value="public">공공기관</option>
+            <option value="vendor">업체</option>
+          </select>
+        </label>
+        <label>
+          <span>이름</span>
+          <input id="contact-name" type="text" placeholder="예: 관리사무소" autocomplete="off" required>
+        </label>
+        <label>
+          <span>연락처</span>
+          <input id="contact-phone" type="text" inputmode="tel" placeholder="예: 051-000-0000" autocomplete="off" required>
+        </label>
+        <label>
+          <span>담당업무</span>
+          <input id="contact-duty" type="text" placeholder="예: 견인, 민원, 보안" autocomplete="off">
+        </label>
+        <label class="contact-form-wide">
+          <span>메모</span>
+          <input id="contact-memo" type="text" placeholder="야간 연락 가능 시간 등">
+        </label>
+        <label class="checkbox-field contact-favorite-field">
+          <input id="contact-favorite" type="checkbox">
+          <span>상단 고정</span>
+        </label>
+        <button id="contact-create-btn" type="submit" class="primary-btn">연락처 등록</button>
+      </form>
+      {% endif %}
+      <div id="contact-list" class="list-board empty-state">연락처를 불러오는 중입니다.</div>
+    </section>
+
     <section class="panel log-panel mobile-tab-panel" data-mobile-tab-panel="recent">
       <div class="panel-head">
         <div>
@@ -622,6 +676,7 @@
     <button type="button" class="mobile-tab-btn" data-mobile-tab="enforce">단속</button>
     <button type="button" class="mobile-tab-btn" data-mobile-tab="search">검색</button>
     <button type="button" class="mobile-tab-btn" data-mobile-tab="cctv">CCTV</button>
+    <button type="button" class="mobile-tab-btn" data-mobile-tab="contacts">연락</button>
     <button type="button" class="mobile-tab-btn" data-mobile-tab="recent">기록조회</button>
     {% if can_manage_vehicles %}
     <button type="button" class="mobile-tab-btn" data-mobile-tab="vehicle-db">차량DB</button>

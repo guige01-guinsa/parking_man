@@ -451,6 +451,49 @@ def ensure_vehicle_management_schema(con: sqlite3.Connection) -> None:
     create_core_query_indexes(con)
 
 
+def ensure_contact_schema(con: sqlite3.Connection) -> None:
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS contacts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_code TEXT NOT NULL,
+          category TEXT NOT NULL,
+          name TEXT NOT NULL,
+          phone TEXT NOT NULL,
+          duty TEXT,
+          memo TEXT,
+          is_favorite INTEGER NOT NULL DEFAULT 0,
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          created_by TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    columns = table_columns(con, "contacts")
+    if "is_favorite" not in columns:
+        con.execute("ALTER TABLE contacts ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0")
+    if "sort_order" not in columns:
+        con.execute("ALTER TABLE contacts ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+    if "created_by" not in columns:
+        con.execute("ALTER TABLE contacts ADD COLUMN created_by TEXT")
+    if "updated_at" not in columns:
+        con.execute("ALTER TABLE contacts ADD COLUMN updated_at TEXT")
+        con.execute("UPDATE contacts SET updated_at = datetime('now') WHERE updated_at IS NULL")
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_contacts_site_category_order
+        ON contacts(site_code, category, is_favorite, sort_order, name)
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_contacts_site_search
+        ON contacts(site_code, name, phone, duty)
+        """
+    )
+
+
 def init_db() -> None:
     schema_path = BASE_DIR / "schema.sql"
     schema_sql = schema_path.read_text(encoding="utf-8")
@@ -462,6 +505,7 @@ def init_db() -> None:
         ensure_billing_schema(con)
         ensure_cctv_request_schema(con)
         ensure_user_role_schema(con)
+        ensure_contact_schema(con)
         create_core_query_indexes(con)
         ensure_billing_schema(con)
         con.commit()

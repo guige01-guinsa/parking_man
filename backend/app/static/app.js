@@ -91,6 +91,18 @@ const cctvContentInput = document.getElementById("cctv-content");
 const cctvRequestList = document.getElementById("cctv-request-list");
 const cctvRefreshBtn = document.getElementById("cctv-refresh-btn");
 const cctvLoadMoreBtn = document.getElementById("cctv-load-more-btn");
+const contactCategoryFilterInput = document.getElementById("contact-category-filter");
+const contactQueryInput = document.getElementById("contact-query");
+const contactSearchBtn = document.getElementById("contact-search-btn");
+const contactRefreshBtn = document.getElementById("contact-refresh-btn");
+const contactList = document.getElementById("contact-list");
+const contactForm = document.getElementById("contact-form");
+const contactCategoryInput = document.getElementById("contact-category");
+const contactNameInput = document.getElementById("contact-name");
+const contactPhoneInput = document.getElementById("contact-phone");
+const contactDutyInput = document.getElementById("contact-duty");
+const contactMemoInput = document.getElementById("contact-memo");
+const contactFavoriteInput = document.getElementById("contact-favorite");
 const historyFilterForm = document.getElementById("history-filter-form");
 const historyQueryInput = document.getElementById("history-query");
 const historyVerdictInput = document.getElementById("history-verdict");
@@ -125,6 +137,7 @@ const USER_ROLE_OPTIONS = [
 ];
 const CCTV_ASSIGNMENT_ROLES = new Set(["admin", "director", "manager", "section_chief", "team_lead"]);
 const currentCanAssignCctv = CCTV_ASSIGNMENT_ROLES.has(currentRole);
+const currentIsAdmin = currentRole === "admin";
 const EXCEL_UPLOAD_SUFFIXES = [".xlsx", ".xlsm"];
 const CCTV_STATUS_OPTIONS = [
   { value: "requested", label: "요청", badgeClass: "badge-idle" },
@@ -132,6 +145,11 @@ const CCTV_STATUS_OPTIONS = [
   { value: "in_progress", label: "진행", badgeClass: "badge-temp" },
   { value: "done", label: "완료", badgeClass: "badge-ok" },
   { value: "cancelled", label: "취소", badgeClass: "badge-danger" },
+];
+const CONTACT_CATEGORY_OPTIONS = [
+  { value: "internal", label: "사내", badgeClass: "badge-ok" },
+  { value: "public", label: "공공기관", badgeClass: "badge-temp" },
+  { value: "vendor", label: "업체", badgeClass: "badge-idle" },
 ];
 
 let latestRawText = "";
@@ -283,6 +301,14 @@ function cctvWeightOptionsMarkup(selectedWeight) {
     .join("");
 }
 
+function contactCategoryOption(category) {
+  return CONTACT_CATEGORY_OPTIONS.find((item) => item.value === category) || CONTACT_CATEGORY_OPTIONS[0];
+}
+
+function contactCategoryOptionsMarkup(selectedCategory) {
+  return CONTACT_CATEGORY_OPTIONS.map((item) => `<option value="${item.value}" ${item.value === selectedCategory ? "selected" : ""}>${item.label}</option>`).join("");
+}
+
 function setStatus(message, tone = "idle") {
   statusBanner.textContent = message;
   statusBanner.className = `status-banner status-${tone}`;
@@ -334,6 +360,8 @@ function refreshActiveMobileTab(tab) {
     loadCctvAssignees()
       .catch(() => {})
       .finally(() => loadCctvRequests().catch(() => {}));
+  } else if (tab === "contacts") {
+    loadContacts().catch(() => {});
   } else if (tab === "recent") {
     loadRecent().catch(() => {});
   } else if (tab === "vehicle-db") {
@@ -1936,6 +1964,174 @@ async function deleteCctvRequest(button) {
   setStatus(`CCTV 요청 #${requestId} 삭제 완료`, "success");
 }
 
+function contactPayloadFromForm() {
+  return {
+    category: contactCategoryInput?.value || "internal",
+    name: contactNameInput?.value.trim() || "",
+    phone: contactPhoneInput?.value.trim() || "",
+    duty: contactDutyInput?.value.trim() || "",
+    memo: contactMemoInput?.value.trim() || "",
+    is_favorite: Boolean(contactFavoriteInput?.checked),
+    sort_order: 0,
+  };
+}
+
+function contactPayloadFromRow(row) {
+  return {
+    category: row.querySelector("[data-contact-category]")?.value || "internal",
+    name: row.querySelector("[data-contact-name]")?.value.trim() || "",
+    phone: row.querySelector("[data-contact-phone]")?.value.trim() || "",
+    duty: row.querySelector("[data-contact-duty]")?.value.trim() || "",
+    memo: row.querySelector("[data-contact-memo]")?.value.trim() || "",
+    is_favorite: Boolean(row.querySelector("[data-contact-favorite]")?.checked),
+    sort_order: Number(row.querySelector("[data-contact-sort]")?.value || 0),
+  };
+}
+
+function renderContactAdminEditor(row) {
+  if (!currentIsAdmin) {
+    return "";
+  }
+  return `
+    <div class="contact-edit-grid">
+      <label>
+        <span>분류</span>
+        <select data-contact-category>${contactCategoryOptionsMarkup(row.category || "internal")}</select>
+      </label>
+      <label>
+        <span>이름</span>
+        <input data-contact-name value="${escapeHtml(row.name || "")}" autocomplete="off">
+      </label>
+      <label>
+        <span>연락처</span>
+        <input data-contact-phone value="${escapeHtml(row.phone || "")}" inputmode="tel" autocomplete="off">
+      </label>
+      <label>
+        <span>담당업무</span>
+        <input data-contact-duty value="${escapeHtml(row.duty || "")}" autocomplete="off">
+      </label>
+      <label class="contact-edit-wide">
+        <span>메모</span>
+        <input data-contact-memo value="${escapeHtml(row.memo || "")}">
+      </label>
+      <label>
+        <span>순서</span>
+        <input data-contact-sort type="number" min="0" max="9999" value="${escapeHtml(row.sort_order || 0)}">
+      </label>
+      <label class="checkbox-field contact-row-favorite">
+        <input data-contact-favorite type="checkbox" ${row.is_favorite ? "checked" : ""}>
+        <span>상단 고정</span>
+      </label>
+    </div>
+    <div class="user-action-row">
+      <button type="button" class="secondary-btn" data-contact-save>수정 저장</button>
+      <button type="button" class="danger-btn" data-contact-delete>삭제</button>
+    </div>
+  `;
+}
+
+function renderContacts(rows) {
+  if (!contactList) return;
+  if (!rows?.length) {
+    contactList.className = "list-board empty-state";
+    contactList.textContent = "등록된 연락처가 없습니다.";
+    return;
+  }
+
+  contactList.className = "list-board contact-list";
+  contactList.innerHTML = rows
+    .map((row) => {
+      const category = contactCategoryOption(row.category);
+      return `
+        <article class="result-item contact-item" data-contact-row="${escapeHtml(row.id)}">
+          <div class="result-top">
+            <div>
+              <div class="contact-title-row">
+                <span class="result-title">${escapeHtml(row.name || "-")}</span>
+                ${row.is_favorite ? '<span class="self-chip">상단</span>' : ""}
+              </div>
+              <div class="subtle">${escapeHtml(row.duty || "담당업무 미입력")}</div>
+            </div>
+            <span class="result-badge ${category.badgeClass}">${escapeHtml(row.category_label || category.label)}</span>
+          </div>
+          <div class="contact-phone-block">${contactActionsMarkup(row.phone)}</div>
+          ${row.memo ? `<div class="subtle contact-memo">${escapeHtml(row.memo)}</div>` : ""}
+          ${renderContactAdminEditor(row)}
+        </article>
+      `;
+    })
+    .join("");
+  refreshSmsLinks(contactList);
+  contactList.querySelectorAll("[data-contact-save]").forEach((button) => {
+    button.addEventListener("click", () => saveContactRow(button).catch((error) => alert(error.message)));
+  });
+  contactList.querySelectorAll("[data-contact-delete]").forEach((button) => {
+    button.addEventListener("click", () => deleteContactRow(button).catch((error) => alert(error.message)));
+  });
+}
+
+async function loadContacts() {
+  if (!contactList) return;
+  const params = new URLSearchParams({ limit: "100" });
+  const category = contactCategoryFilterInput?.value || "";
+  const q = contactQueryInput?.value.trim() || "";
+  if (category) params.set("category", category);
+  if (q) params.set("q", q);
+  const rows = await fetchJson(`${apiUrl("/api/contacts")}?${params.toString()}`);
+  renderContacts(Array.isArray(rows) ? rows : []);
+}
+
+async function createContact(event) {
+  event.preventDefault();
+  const payload = contactPayloadFromForm();
+  if (!payload.name || !payload.phone) {
+    alert("이름과 연락처를 입력해 주세요.");
+    return;
+  }
+  setStatus("연락처 등록 중", "active");
+  await fetchJson(apiUrl("/api/contacts"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  contactForm.reset();
+  await loadContacts();
+  setStatus("연락처 등록 완료", "success");
+}
+
+async function saveContactRow(button) {
+  const row = button.closest("[data-contact-row]");
+  if (!row) return;
+  const contactId = row.dataset.contactRow;
+  const payload = contactPayloadFromRow(row);
+  if (!payload.name || !payload.phone) {
+    alert("이름과 연락처를 입력해 주세요.");
+    return;
+  }
+  setStatus("연락처 수정 중", "active");
+  await fetchJson(apiUrl(`/api/contacts/${encodeURIComponent(contactId)}`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  await loadContacts();
+  setStatus("연락처 수정 완료", "success");
+}
+
+async function deleteContactRow(button) {
+  const row = button.closest("[data-contact-row]");
+  if (!row) return;
+  const contactId = row.dataset.contactRow;
+  const name = row.querySelector("[data-contact-name]")?.value || row.querySelector(".result-title")?.textContent || "";
+  if (!confirm(`${name || "선택한 연락처"}를 삭제하시겠습니까?`)) {
+    return;
+  }
+  setStatus("연락처 삭제 중", "active");
+  await fetchJson(apiUrl(`/api/contacts/${encodeURIComponent(contactId)}`), { method: "DELETE" });
+  await loadContacts();
+  setStatus("연락처 삭제 완료", "success");
+}
+
 async function loadUsers({ append = false } = {}) {
   if (!userList) return;
   const offset = append ? userOffset : 0;
@@ -2236,6 +2432,16 @@ siteLoadMoreBtn?.addEventListener("click", () => loadSites({ append: true }).cat
 cctvRequestForm?.addEventListener("submit", (event) => createCctvRequest(event).catch((error) => alert(error.message)));
 cctvRefreshBtn?.addEventListener("click", () => loadCctvRequests().catch((error) => alert(error.message)));
 cctvLoadMoreBtn?.addEventListener("click", () => loadCctvRequests({ append: true }).catch((error) => alert(error.message)));
+contactForm?.addEventListener("submit", (event) => createContact(event).catch((error) => alert(error.message)));
+contactRefreshBtn?.addEventListener("click", () => loadContacts().catch((error) => alert(error.message)));
+contactSearchBtn?.addEventListener("click", () => loadContacts().catch((error) => alert(error.message)));
+contactCategoryFilterInput?.addEventListener("change", () => loadContacts().catch((error) => alert(error.message)));
+contactQueryInput?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    loadContacts().catch((error) => alert(error.message));
+  }
+});
 historyFilterForm?.addEventListener("submit", (event) => {
   event.preventDefault();
   loadRecent().catch((error) => alert(error.message));
@@ -2310,6 +2516,14 @@ if (isCompactScreen) {
         });
       });
   }
+  if (activeMobileTab === "contacts") {
+    loadContacts().catch((error) => {
+      if (contactList) {
+        contactList.className = "list-board empty-state";
+        contactList.textContent = error.message;
+      }
+    });
+  }
   if (activeMobileTab === "vehicle-db") {
     loadVehicleBackups().catch(() => {});
   }
@@ -2329,6 +2543,7 @@ if (isCompactScreen) {
   loadBillingStatus().catch(() => {});
   loadUsers().catch(() => {});
   loadSites().catch(() => {});
+  loadContacts().catch(() => {});
   scheduleBackgroundLoad(() => {
     loadCctvAssignees()
       .catch(() => {})

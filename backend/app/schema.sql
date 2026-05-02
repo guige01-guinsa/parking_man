@@ -137,6 +137,21 @@ CREATE TABLE IF NOT EXISTS site_settings (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS contacts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  site_code TEXT NOT NULL,
+  category TEXT NOT NULL,
+  name TEXT NOT NULL,
+  phone TEXT NOT NULL,
+  duty TEXT,
+  memo TEXT,
+  is_favorite INTEGER NOT NULL DEFAULT 0,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS billing_inquiries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   site_code TEXT NOT NULL,
@@ -185,3 +200,5 @@ CREATE INDEX IF NOT EXISTS idx_vehicle_backups_site_created ON vehicle_backups(s
 CREATE INDEX IF NOT EXISTS idx_vehicle_change_logs_site_created ON vehicle_change_logs(site_code, created_at);
 CREATE INDEX IF NOT EXISTS idx_billing_inquiries_site_created_at ON billing_inquiries(site_code, created_at);
 CREATE INDEX IF NOT EXISTS idx_google_play_purchases_site_verified ON google_play_purchases(site_code, verified_at);
+CREATE INDEX IF NOT EXISTS idx_contacts_site_category_order ON contacts(site_code, category, is_favorite, sort_order, name);
+CREATE INDEX IF NOT EXISTS idx_contacts_site_search ON contacts(site_code, name, phone, duty);

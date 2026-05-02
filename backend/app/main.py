@@ -166,6 +166,16 @@ class CctvAssignmentRequest(BaseModel):
     status: str | None = None
 
 
+class ContactUpsertRequest(BaseModel):
+    category: str
+    name: str
+    phone: str
+    duty: str | None = None
+    memo: str | None = None
+    is_favorite: bool = False
+    sort_order: int = Field(0, ge=0, le=9999)
+
+
 class EnforcementEventUpdateRequest(BaseModel):
     plate: str | None = None
     inspector: str | None = None
@@ -198,6 +208,11 @@ CCTV_STATUS_LABELS = {
     "cancelled": "취소",
 }
 CCTV_STATUSES = set(CCTV_STATUS_LABELS)
+CONTACT_CATEGORY_LABELS = {
+    "internal": "사내",
+    "public": "공공기관",
+    "vendor": "업체",
+}
 BILLING_PLAN_CATALOG = {
     "trial": {
         "code": "trial",
@@ -982,6 +997,24 @@ def require_form_text(value: str | None, label: str) -> str:
     return text
 
 
+def normalize_contact_category(value: str | None) -> str:
+    category = str(value or "").strip().lower()
+    if category not in CONTACT_CATEGORY_LABELS:
+        raise HTTPException(status_code=400, detail="연락처 분류를 다시 확인해 주세요.")
+    return category
+
+
+def normalize_contact_text(value: str | None, label: str, max_length: int, *, required: bool = False) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        if required:
+            raise HTTPException(status_code=400, detail=f"{label}을 입력해 주세요.")
+        return None
+    if len(text) > max_length:
+        raise HTTPException(status_code=400, detail=f"{label}은 {max_length}자 이내로 입력해 주세요.")
+    return text
+
+
 def validate_cctv_time_range(search_start_time: str, search_end_time: str) -> None:
     if search_end_time < search_start_time:
         raise HTTPException(status_code=400, detail="검색 끝 시간은 시작 시간 이후로 입력해 주세요.")
@@ -1358,6 +1391,25 @@ def require_cctv_request(con, site_code: str, request_id: int) -> dict[str, Any]
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="CCTV 검색요청을 찾을 수 없습니다.")
+    return dict(row)
+
+
+def contact_row_dict(row: dict[str, Any] | Any) -> dict[str, Any]:
+    data = dict(row)
+    category = data.get("category")
+    data["category_label"] = CONTACT_CATEGORY_LABELS.get(category, category or "-")
+    data["is_favorite"] = bool(data.get("is_favorite", 0))
+    data["sort_order"] = int(data.get("sort_order") or 0)
+    return data
+
+
+def require_contact(con, site_code: str, contact_id: int) -> dict[str, Any]:
+    row = con.execute(
+        "SELECT * FROM contacts WHERE site_code = ? AND id = ?",
+        (site_code, contact_id),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="연락처를 찾을 수 없습니다.")
     return dict(row)
 
 
@@ -2081,6 +2133,107 @@ def api_cctv_request_delete(request: Request, request_id: int):
         con.execute("DELETE FROM cctv_search_requests WHERE site_code = ? AND id = ?", (site_code, request_id))
         con.commit()
     return {"deleted": True, "id": request_id}
+
+
+@app.get("/api/contacts")
+def api_contacts(request: Request, category: str = "", q: str = "", limit: int = 100, offset: int = 0):
+    ensure_ready()
+    require_role(request, VIEW_ROLES)
+    site_code = current_site_code(request)
+    limit = min(max(limit, 1), 200)
+    offset = max(offset, 0)
+    where = ["site_code = ?"]
+    params: list[Any] = [site_code]
+    if category:
+        where.append("category = ?")
+        params.append(normalize_contact_category(category))
+    query = str(q or "").strip()
+    if query:
+        like = f"%{query}%"
+        where.append(
+            """
+            (
+              name LIKE ?
+              OR phone LIKE ?
+              OR COALESCE(duty, '') LIKE ?
+              OR COALESCE(memo, '') LIKE ?
+            )
+            """
+        )
+        params.extend([like, like, like, like])
+    params.extend([limit, offset])
+    with connect() as con:
+        rows = con.execute(
+            f"""
+            SELECT *
+            FROM contacts
+            WHERE {' AND '.join(where)}
+            ORDER BY is_favorite DESC, category, sort_order, name, id DESC
+            LIMIT ? OFFSET ?
+            """,
+            params,
+        ).fetchall()
+    return [contact_row_dict(row) for row in rows]
+
+
+@app.post("/api/contacts")
+def api_contact_create(request: Request, payload: ContactUpsertRequest):
+    ensure_ready()
+    session = require_role(request, {"admin"})
+    site_code = current_site_code(request)
+    category = normalize_contact_category(payload.category)
+    name = normalize_contact_text(payload.name, "이름", 80, required=True)
+    phone = normalize_contact_text(payload.phone, "연락처", 40, required=True)
+    duty = normalize_contact_text(payload.duty, "담당업무", 120)
+    memo = normalize_contact_text(payload.memo, "메모", 300)
+    with connect() as con:
+        cur = con.execute(
+            """
+            INSERT INTO contacts(site_code, category, name, phone, duty, memo, is_favorite, sort_order, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (site_code, category, name, phone, duty, memo, 1 if payload.is_favorite else 0, payload.sort_order, session.get("u")),
+        )
+        row = con.execute("SELECT * FROM contacts WHERE id = ?", (cur.lastrowid,)).fetchone()
+        con.commit()
+    return contact_row_dict(row)
+
+
+@app.patch("/api/contacts/{contact_id}")
+def api_contact_update(request: Request, contact_id: int, payload: ContactUpsertRequest):
+    ensure_ready()
+    require_role(request, {"admin"})
+    site_code = current_site_code(request)
+    category = normalize_contact_category(payload.category)
+    name = normalize_contact_text(payload.name, "이름", 80, required=True)
+    phone = normalize_contact_text(payload.phone, "연락처", 40, required=True)
+    duty = normalize_contact_text(payload.duty, "담당업무", 120)
+    memo = normalize_contact_text(payload.memo, "메모", 300)
+    with connect() as con:
+        require_contact(con, site_code, contact_id)
+        con.execute(
+            """
+            UPDATE contacts
+            SET category = ?, name = ?, phone = ?, duty = ?, memo = ?, is_favorite = ?, sort_order = ?, updated_at = datetime('now')
+            WHERE site_code = ? AND id = ?
+            """,
+            (category, name, phone, duty, memo, 1 if payload.is_favorite else 0, payload.sort_order, site_code, contact_id),
+        )
+        row = con.execute("SELECT * FROM contacts WHERE site_code = ? AND id = ?", (site_code, contact_id)).fetchone()
+        con.commit()
+    return contact_row_dict(row)
+
+
+@app.delete("/api/contacts/{contact_id}")
+def api_contact_delete(request: Request, contact_id: int):
+    ensure_ready()
+    require_role(request, {"admin"})
+    site_code = current_site_code(request)
+    with connect() as con:
+        require_contact(con, site_code, contact_id)
+        con.execute("DELETE FROM contacts WHERE site_code = ? AND id = ?", (site_code, contact_id))
+        con.commit()
+    return {"deleted": True, "id": contact_id}
 
 
 @app.get("/api/registry/check", response_model=CheckResponse)
