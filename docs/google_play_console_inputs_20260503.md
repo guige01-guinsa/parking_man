@@ -61,16 +61,16 @@
 Play Console에 입력할 개인정보처리방침 URL:
 
 ```text
+https://parking-man.onrender.com/privacy
+```
+
+사용자 지정 도메인 연결 후 사용할 수 있는 주소:
+
+```text
 https://www.ka-part.com/privacy
 ```
 
-Render 직접 주소를 써야 할 경우:
-
-```text
-https://parking-management-backend.onrender.com/privacy
-```
-
-권장 입력값은 운영 도메인 `https://www.ka-part.com/privacy`입니다. Play Console에 넣기 전 브라우저에서 열리는지 확인하세요.
+현재 확인된 공개 주소는 `https://parking-man.onrender.com/privacy`입니다. `https://www.ka-part.com/privacy`는 사용자 지정 도메인이 해당 서비스로 연결된 뒤 사용하세요. Play Console에 넣기 전 브라우저에서 열리는지 확인하세요.
 
 ## 3. 앱 콘텐츠 입력 기준
 
@@ -141,4 +141,3 @@ https://parking-management-backend.onrender.com/privacy
 9. 테스터 이메일 12명 이상 등록
 10. 14일 이상 테스트 진행
 11. 피드백 반영 후 프로덕션 출시 신청
-
