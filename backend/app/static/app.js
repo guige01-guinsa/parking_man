@@ -158,6 +158,8 @@ let currentGeo = { lat: null, lng: null };
 let objectUrl = "";
 let latestOcrBestPlate = "";
 let latestOcrCandidates = [];
+let latestNativeOcr = null;
+let nativeOcrWaiters = [];
 let currentCheckMatches = [];
 let currentCheckIndex = 0;
 let currentCheckRequestedPlate = "";
@@ -1499,6 +1501,50 @@ async function fetchJson(url, options = {}) {
   return response.json();
 }
 
+function nativeOcrAvailable() {
+  try {
+    return Boolean(window.ParkingNativeOcr?.isAvailable?.());
+  } catch (_) {
+    return false;
+  }
+}
+
+function resolveNativeOcrWaiters(payload) {
+  const waiters = nativeOcrWaiters;
+  nativeOcrWaiters = [];
+  waiters.forEach((resolve) => resolve(payload || null));
+}
+
+window.handleNativePlateOcr = (payload) => {
+  latestNativeOcr = payload && typeof payload === "object" ? payload : null;
+  if (latestNativeOcr?.candidates?.length) {
+    renderCandidates(latestNativeOcr.candidates);
+    const elapsed = Number(latestNativeOcr.elapsed_ms || 0);
+    setStatus(`휴대폰 OCR 후보 ${latestNativeOcr.candidates.length}개 감지${elapsed ? ` · ${elapsed}ms` : ""}`, "active");
+  }
+  resolveNativeOcrWaiters(latestNativeOcr);
+};
+
+function waitForNativeOcr(timeoutMs = 1400) {
+  if (!nativeOcrAvailable()) {
+    return Promise.resolve(null);
+  }
+  if (latestNativeOcr?.raw_text || latestNativeOcr?.candidates?.length || latestNativeOcr?.error) {
+    return Promise.resolve(latestNativeOcr);
+  }
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      nativeOcrWaiters = nativeOcrWaiters.filter((waiter) => waiter !== done);
+      resolve(null);
+    }, timeoutMs);
+    const done = (payload) => {
+      clearTimeout(timer);
+      resolve(payload || null);
+    };
+    nativeOcrWaiters.push(done);
+  });
+}
+
 async function runCheck() {
   const plate = plateInput.value.trim();
   if (!plate) {
@@ -1530,10 +1576,19 @@ async function runScan() {
     return;
   }
 
-  setStatus("번호판 OCR 판독 중", "active");
+  setStatus(nativeOcrAvailable() ? "휴대폰 OCR 판독 중" : "번호판 OCR 판독 중", "active");
+  const nativeOcr = await waitForNativeOcr();
   const formData = new FormData();
   formData.append("photo", photoInput.files[0]);
   formData.append("manual_plate", plateInput.value.trim());
+  if (nativeOcr?.raw_text || nativeOcr?.candidates?.length) {
+    formData.append("client_ocr_provider", nativeOcr.provider || "android-mlkit");
+    formData.append("client_ocr_raw_text", nativeOcr.raw_text || "");
+    formData.append("client_ocr_candidates", JSON.stringify(nativeOcr.candidates || []));
+    setStatus("휴대폰 OCR 결과로 등록차량 DB 조회 중", "active");
+  } else if (nativeOcr?.error) {
+    geoStatus.textContent = nativeOcr.error;
+  }
 
   const result = await fetchJson(apiUrl("/api/ocr/scan"), { method: "POST", body: formData });
   latestRawText = result.raw_text || "";
@@ -1560,6 +1615,8 @@ async function runScan() {
   }
   if (result.error) {
     geoStatus.textContent = result.error;
+  } else if (result.server_ocr_used) {
+    geoStatus.textContent = "휴대폰 OCR 후보가 없어 서버 보조 OCR을 사용했습니다.";
   }
 }
 
@@ -1571,6 +1628,8 @@ function vibrate(pattern) {
 
 function resetWorkflow() {
   photoInput.value = "";
+  latestNativeOcr = null;
+  resolveNativeOcrWaiters(null);
   scanAttemptCount = 0;
   updateCaptureLimitState();
   updatePreview(null);
@@ -2343,6 +2402,8 @@ function loadGeolocation() {
 
 photoInput?.addEventListener("change", () => {
   const file = photoInput.files?.[0];
+  latestNativeOcr = null;
+  resolveNativeOcrWaiters(null);
   if (file) {
     scanAttemptCount += 1;
     updateCaptureLimitState();

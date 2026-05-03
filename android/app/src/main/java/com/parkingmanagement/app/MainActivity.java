@@ -24,22 +24,38 @@ import com.android.billingclient.api.Purchase;
 import com.android.billingclient.api.PurchasesUpdatedListener;
 import com.android.billingclient.api.QueryProductDetailsParams;
 import com.android.billingclient.api.QueryPurchasesParams;
+import com.google.mlkit.vision.common.InputImage;
+import com.google.mlkit.vision.text.Text;
+import com.google.mlkit.vision.text.TextRecognition;
+import com.google.mlkit.vision.text.TextRecognizer;
+import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions;
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class MainActivity extends Activity implements PurchasesUpdatedListener {
     private static final int FILE_CHOOSER_REQUEST = 5101;
+    private static final String PLATE_MIDDLE_CHARS = "가나다라마바사아자거너더러머버서어저고노도로모보소오조구누두루무부수우주바사자배허하호";
+    private static final Pattern PLATE_PATTERN = Pattern.compile("\\d{2,3}[" + PLATE_MIDDLE_CHARS + "]\\d{4}");
 
     private WebView webView;
     private BillingClient billingClient;
+    private TextRecognizer koreanTextRecognizer;
+    private TextRecognizer latinTextRecognizer;
     private ValueCallback<Uri[]> filePathCallback;
     private final Map<String, ProductDetails> productDetailsById = new HashMap<>();
 
@@ -56,6 +72,7 @@ public class MainActivity extends Activity implements PurchasesUpdatedListener {
         setContentView(webView);
         configureWebView();
         configureBilling();
+        configureOcr();
         webView.loadUrl(BuildConfig.APP_URL);
     }
 
@@ -72,6 +89,7 @@ public class MainActivity extends Activity implements PurchasesUpdatedListener {
         settings.setAllowContentAccess(true);
 
         webView.addJavascriptInterface(new BillingBridge(), "ParkingBilling");
+        webView.addJavascriptInterface(new NativeOcrBridge(), "ParkingNativeOcr");
         webView.setWebViewClient(new WebViewClient());
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
@@ -94,6 +112,11 @@ public class MainActivity extends Activity implements PurchasesUpdatedListener {
                 return true;
             }
         });
+    }
+
+    private void configureOcr() {
+        koreanTextRecognizer = TextRecognition.getClient(new KoreanTextRecognizerOptions.Builder().build());
+        latinTextRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
     }
 
     private void configureBilling() {
@@ -265,6 +288,183 @@ public class MainActivity extends Activity implements PurchasesUpdatedListener {
         runOnUiThread(() -> webView.evaluateJavascript(script, null));
     }
 
+    private void notifyNativeOcr(JSONObject payload) {
+        String script = String.format(
+            Locale.US,
+            "window.handleNativePlateOcr && window.handleNativePlateOcr(%s);",
+            payload.toString()
+        );
+        runOnUiThread(() -> webView.evaluateJavascript(script, null));
+    }
+
+    private void notifyNativeOcrError(String message) {
+        try {
+            JSONObject payload = new JSONObject();
+            payload.put("provider", "android-mlkit");
+            payload.put("raw_text", "");
+            payload.put("candidates", new JSONArray());
+            payload.put("error", message);
+            notifyNativeOcr(payload);
+        } catch (Exception ignored) {
+            // ignore
+        }
+    }
+
+    private void runNativeOcr(Uri imageUri) {
+        if (imageUri == null || koreanTextRecognizer == null || latinTextRecognizer == null) {
+            return;
+        }
+        final long startedAt = System.currentTimeMillis();
+        final InputImage image;
+        try {
+            image = InputImage.fromFilePath(this, imageUri);
+        } catch (IOException exc) {
+            notifyNativeOcrError("휴대폰 OCR 이미지를 읽지 못했습니다.");
+            return;
+        }
+
+        koreanTextRecognizer.process(image)
+            .addOnSuccessListener(koreanText -> latinTextRecognizer.process(image)
+                .addOnSuccessListener(latinText -> publishNativeOcr(koreanText, latinText, startedAt))
+                .addOnFailureListener(exc -> publishNativeOcr(koreanText, null, startedAt)))
+            .addOnFailureListener(exc -> latinTextRecognizer.process(image)
+                .addOnSuccessListener(latinText -> publishNativeOcr(null, latinText, startedAt))
+                .addOnFailureListener(fallbackExc -> notifyNativeOcrError("휴대폰 OCR 판독에 실패했습니다.")));
+    }
+
+    private void publishNativeOcr(Text koreanText, Text latinText, long startedAt) {
+        StringBuilder rawTextBuilder = new StringBuilder();
+        if (koreanText != null && !koreanText.getText().trim().isEmpty()) {
+            rawTextBuilder.append("[android-korean] ").append(koreanText.getText().trim());
+        }
+        if (latinText != null && !latinText.getText().trim().isEmpty()) {
+            if (rawTextBuilder.length() > 0) {
+                rawTextBuilder.append("\n");
+            }
+            rawTextBuilder.append("[android-latin] ").append(latinText.getText().trim());
+        }
+
+        String rawText = rawTextBuilder.toString().trim();
+        List<String> candidates = extractPlateCandidates(rawText);
+        try {
+            JSONObject payload = new JSONObject();
+            JSONArray candidateArray = new JSONArray();
+            for (String candidate : candidates) {
+                candidateArray.put(candidate);
+            }
+            payload.put("provider", "android-mlkit");
+            payload.put("raw_text", rawText);
+            payload.put("candidates", candidateArray);
+            payload.put("elapsed_ms", Math.max(0, System.currentTimeMillis() - startedAt));
+            notifyNativeOcr(payload);
+        } catch (Exception exc) {
+            notifyNativeOcrError("휴대폰 OCR 결과를 전달하지 못했습니다.");
+        }
+    }
+
+    private List<String> extractPlateCandidates(String text) {
+        Set<String> candidates = new LinkedHashSet<>();
+        List<String> variants = new ArrayList<>();
+        variants.add(text == null ? "" : text);
+        variants.add((text == null ? "" : text).replaceAll("\\s+", ""));
+        variants.add((text == null ? "" : text).replaceAll("[\\s\\-_/.:]", ""));
+
+        for (String variant : variants) {
+            String compact = compactPlateText(variant);
+            Matcher matcher = PLATE_PATTERN.matcher(compact);
+            while (matcher.find()) {
+                candidates.add(matcher.group());
+            }
+            for (int windowSize : new int[] {7, 8}) {
+                if (compact.length() < windowSize) {
+                    continue;
+                }
+                for (int index = 0; index <= compact.length() - windowSize; index++) {
+                    String repaired = repairPlateWindow(compact.substring(index, index + windowSize));
+                    if (repaired != null) {
+                        candidates.add(repaired);
+                    }
+                }
+            }
+        }
+        return new ArrayList<>(candidates);
+    }
+
+    private String compactPlateText(String text) {
+        if (text == null) {
+            return "";
+        }
+        return text.trim()
+            .toUpperCase(Locale.US)
+            .replaceAll("[\\s\\-_/.:]", "")
+            .replaceAll("[^0-9A-Z가-힣|!$]", "");
+    }
+
+    private String repairPlateWindow(String window) {
+        int middleIndex = window.length() - 5;
+        if (middleIndex != 2 && middleIndex != 3) {
+            return null;
+        }
+        char middle = window.charAt(middleIndex);
+        if (PLATE_MIDDLE_CHARS.indexOf(middle) < 0) {
+            return null;
+        }
+        String head = repairDigits(window.substring(0, middleIndex));
+        String tail = repairDigits(window.substring(middleIndex + 1));
+        if (head == null || tail == null) {
+            return null;
+        }
+        String candidate = head + middle + tail;
+        return PLATE_PATTERN.matcher(candidate).matches() ? candidate : null;
+    }
+
+    private String repairDigits(String value) {
+        StringBuilder digits = new StringBuilder();
+        for (int i = 0; i < value.length(); i++) {
+            char item = value.charAt(i);
+            if (Character.isDigit(item)) {
+                digits.append(item);
+                continue;
+            }
+            String mapped = similarDigit(item);
+            if (mapped == null) {
+                return null;
+            }
+            digits.append(mapped);
+        }
+        return digits.toString();
+    }
+
+    private String similarDigit(char value) {
+        switch (value) {
+            case 'O':
+            case 'Q':
+            case 'D':
+            case 'U':
+                return "0";
+            case 'I':
+            case 'L':
+            case '|':
+            case '!':
+                return "1";
+            case 'Z':
+                return "2";
+            case 'A':
+                return "4";
+            case 'S':
+            case '$':
+                return "5";
+            case 'G':
+                return "6";
+            case 'T':
+                return "7";
+            case 'B':
+                return "8";
+            default:
+                return null;
+        }
+    }
+
     private String obfuscatedAccountId(String accountHint) {
         String source = accountHint == null || accountHint.trim().isEmpty()
             ? Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID)
@@ -300,6 +500,12 @@ public class MainActivity extends Activity implements PurchasesUpdatedListener {
         if (billingClient != null) {
             billingClient.endConnection();
         }
+        if (koreanTextRecognizer != null) {
+            koreanTextRecognizer.close();
+        }
+        if (latinTextRecognizer != null) {
+            latinTextRecognizer.close();
+        }
         if (webView != null) {
             webView.destroy();
         }
@@ -324,6 +530,9 @@ public class MainActivity extends Activity implements PurchasesUpdatedListener {
         Uri[] results = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
         filePathCallback.onReceiveValue(results);
         filePathCallback = null;
+        if (results != null && results.length > 0) {
+            runNativeOcr(results[0]);
+        }
     }
 
     public class BillingBridge {
@@ -335,6 +544,13 @@ public class MainActivity extends Activity implements PurchasesUpdatedListener {
         @JavascriptInterface
         public void purchase(String productId, String accountHint) {
             runOnUiThread(() -> launchPurchase(productId, accountHint));
+        }
+    }
+
+    public class NativeOcrBridge {
+        @JavascriptInterface
+        public boolean isAvailable() {
+            return koreanTextRecognizer != null && latinTextRecognizer != null;
         }
     }
 }

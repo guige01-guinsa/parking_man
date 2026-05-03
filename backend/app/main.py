@@ -27,7 +27,7 @@ from .db import DEFAULT_SITE_CODE, DEFAULT_SITE_NAME, connect, init_db, maybe_se
 from .excel_import import describe_excel_files, store_registry_upload, sync_registry_from_dir
 from .ocr_learning import get_learning_candidates, get_learning_status, parse_candidates_json, record_ocr_feedback
 from .ocr import scan_plate_image
-from .plates import PlateVerdict, evaluate_vehicle_row, normalize_plate
+from .plates import PlateVerdict, evaluate_vehicle_row, extract_plate_candidates, normalize_plate
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -2443,24 +2443,51 @@ def api_site_settings_capture_placeholder_delete(request: Request):
 
 
 @app.post("/api/ocr/scan")
-async def api_ocr_scan(request: Request, photo: UploadFile = File(...), manual_plate: str | None = Form(None)):
+async def api_ocr_scan(
+    request: Request,
+    photo: UploadFile = File(...),
+    manual_plate: str | None = Form(None),
+    client_ocr_raw_text: str | None = Form(None),
+    client_ocr_candidates: str | None = Form(None),
+    client_ocr_provider: str | None = Form(None),
+):
     ensure_ready()
     require_role(request, VIEW_ROLES)
     image_bytes = await photo.read()
     if not image_bytes:
         raise HTTPException(status_code=400, detail="사진 파일이 비어 있습니다.")
 
-    scan = scan_plate_image(image_bytes)
     site_code = current_site_code(request)
-    best_plate, ordered_candidates = choose_best_scan_candidate(site_code, scan.raw_text, manual_plate, scan.candidates)
+    native_raw_text = str(client_ocr_raw_text or "").strip()
+    native_candidates = parse_candidates_json(client_ocr_candidates)
+    if native_raw_text and not native_candidates:
+        native_candidates = extract_plate_candidates(native_raw_text)
+
+    scan = None
+    raw_text = native_raw_text
+    provider = str(client_ocr_provider or "").strip() or "server"
+    error = None
+    server_ocr_used = False
+    best_plate, ordered_candidates = choose_best_scan_candidate(site_code, native_raw_text, manual_plate, native_candidates)
+
+    if not best_plate:
+        scan = scan_plate_image(image_bytes)
+        server_ocr_used = True
+        provider = scan.provider if not native_raw_text else f"{provider}+{scan.provider}"
+        raw_text = "\n".join([item for item in [native_raw_text, scan.raw_text] if item]).strip()
+        error = scan.error
+        combined_candidates = native_candidates + scan.candidates
+        best_plate, ordered_candidates = choose_best_scan_candidate(site_code, raw_text, manual_plate, combined_candidates)
+
     match = build_check_response(current_site_code(request), best_plate).model_dump() if best_plate else None
     return {
-        "provider": scan.provider,
-        "raw_text": scan.raw_text,
+        "provider": provider,
+        "raw_text": raw_text,
         "candidates": ordered_candidates,
         "best_plate": best_plate,
         "match": match,
-        "error": scan.error,
+        "server_ocr_used": server_ocr_used,
+        "error": error,
     }
 
 
