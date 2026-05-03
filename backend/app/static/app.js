@@ -20,6 +20,11 @@ const captureButtonLabel = photoInput?.closest(".capture-button");
 const saveBtn = document.getElementById("save-btn");
 const resetBtn = document.getElementById("reset-btn");
 const candidateList = document.getElementById("candidate-list");
+const ocrNote = document.getElementById("ocr-note");
+const ocrLearningPanel = document.getElementById("ocr-learning-panel");
+const ocrLearningTitle = document.getElementById("ocr-learning-title");
+const ocrLearningText = document.getElementById("ocr-learning-text");
+const ocrLearningBadge = document.getElementById("ocr-learning-badge");
 const ocrRaw = document.getElementById("ocr-raw");
 const verdictCard = document.getElementById("verdict-card");
 const verdictTitle = document.getElementById("verdict-title");
@@ -193,6 +198,14 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function compactPlateValue(value) {
+  return String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s\-_/.:]/g, "")
+    .replace(/[^\dA-Z가-힣|!$]/g, "");
+}
+
 function phoneHref(value) {
   const raw = String(value ?? "").trim();
   if (!raw) return "";
@@ -314,6 +327,46 @@ function contactCategoryOptionsMarkup(selectedCategory) {
 function setStatus(message, tone = "idle") {
   statusBanner.textContent = message;
   statusBanner.className = `status-banner status-${tone}`;
+}
+
+function updateOcrLearningPanel() {
+  if (!ocrLearningPanel || !ocrLearningTitle || !ocrLearningText || !ocrLearningBadge) return;
+  const currentPlate = compactPlateValue(plateInput?.value || "");
+  const suggestedPlate = compactPlateValue(latestOcrBestPlate);
+  const hasOcrSignal = Boolean(latestRawText || latestOcrCandidates.length || latestNativeOcr?.raw_text || latestNativeOcr?.candidates?.length);
+
+  let state = "idle";
+  let title = "촬영 후 번호를 확인해 주세요.";
+  let text = "번호를 그대로 저장하거나 고쳐 저장하면 다음 판독 후보 정렬에 반영됩니다.";
+  let badge = "대기";
+
+  if (hasOcrSignal && !currentPlate) {
+    state = "ready";
+    title = "후보를 선택하거나 차량번호를 입력해 주세요.";
+    text = "확인한 번호로 저장하면 이 사진의 OCR 결과가 학습 데이터로 누적됩니다.";
+    badge = "확인 필요";
+  } else if (hasOcrSignal && suggestedPlate && currentPlate && suggestedPlate !== currentPlate) {
+    state = "corrected";
+    title = "사용자 교정값이 학습됩니다.";
+    text = `${suggestedPlate} 후보를 ${currentPlate}로 고쳐 저장하면 다음부터 이 유형의 오인식이 줄어듭니다.`;
+    badge = "교정 학습";
+  } else if (hasOcrSignal && currentPlate) {
+    state = "accepted";
+    title = "확인한 번호가 학습됩니다.";
+    text = "저장 시 현재 번호가 올바른 판독값으로 기록되어 다음 후보 정렬에 반영됩니다.";
+    badge = "확인 학습";
+  }
+
+  ocrLearningPanel.className = `learning-panel learning-${state}`;
+  ocrLearningTitle.textContent = title;
+  ocrLearningText.textContent = text;
+  ocrLearningBadge.textContent = badge;
+  if (ocrNote) {
+    ocrNote.textContent =
+      state === "corrected"
+        ? "잘못 판독된 번호를 고쳐 저장하면 이 시스템의 OCR 후보 정렬이 실제 현장 데이터에 맞게 좋아집니다."
+        : "사진을 선택하면 자동으로 OCR을 시도합니다. 결과가 틀리면 차량번호를 직접 고쳐 저장해 주세요. 그 교정 이력은 다음 판독 후보 정렬에 다시 반영됩니다.";
+  }
 }
 
 function readStoredValue(key, fallback = "") {
@@ -492,6 +545,7 @@ function renderIdleVerdict() {
   verdictMatchNote.textContent = "";
   verdictMeta.innerHTML = "";
   saveBtn.textContent = "단속 기록 저장";
+  updateOcrLearningPanel();
 }
 
 function toMatchItem(data) {
@@ -563,6 +617,7 @@ function renderVerdict(data) {
 
   renderMatchNavigator(data);
   refreshSmsLinks(verdictMeta);
+  updateOcrLearningPanel();
 }
 
 function applyCheckResponse(data) {
@@ -619,6 +674,7 @@ function renderCandidates(items) {
       plateInput.value = button.dataset.plate || "";
       setStatus(`후보 번호 ${button.dataset.plate} 선택`, "active");
       runCheck().catch((error) => alert(error.message));
+      updateOcrLearningPanel();
     });
   });
 }
@@ -1522,6 +1578,7 @@ window.handleNativePlateOcr = (payload) => {
     const elapsed = Number(latestNativeOcr.elapsed_ms || 0);
     setStatus(`휴대폰 OCR 후보 ${latestNativeOcr.candidates.length}개 감지${elapsed ? ` · ${elapsed}ms` : ""}`, "active");
   }
+  updateOcrLearningPanel();
   resolveNativeOcrWaiters(latestNativeOcr);
 };
 
@@ -1618,6 +1675,7 @@ async function runScan() {
   } else if (result.server_ocr_used) {
     geoStatus.textContent = "휴대폰 OCR 후보가 없어 서버 보조 OCR을 사용했습니다.";
   }
+  updateOcrLearningPanel();
 }
 
 function vibrate(pattern) {
@@ -1641,6 +1699,7 @@ function resetWorkflow() {
   renderCandidates([]);
   renderIdleVerdict();
   syncQuickMemoState();
+  updateOcrLearningPanel();
   setStatus("다음 차량 촬영 준비", "idle");
 }
 
@@ -1667,11 +1726,18 @@ async function saveEvent() {
   if (currentGeo.lng !== null) formData.append("lng", String(currentGeo.lng));
   if (photoInput.files?.length) formData.append("photo", photoInput.files[0]);
 
-  await fetchJson(apiUrl("/api/enforcement/submit"), { method: "POST", body: formData });
+  const saved = await fetchJson(apiUrl("/api/enforcement/submit"), { method: "POST", body: formData });
   await loadRecent();
   vibrate([80, 40, 80]);
-  setStatus("기록 저장 완료", "success");
   resetWorkflow();
+  const learning = saved.ocr_learning_feedback || {};
+  if (learning.recorded && learning.corrected) {
+    setStatus("기록 저장 완료 · 교정값이 OCR 학습에 반영됐습니다.", "success");
+  } else if (learning.recorded) {
+    setStatus("기록 저장 완료 · 확인값이 OCR 학습에 반영됐습니다.", "success");
+  } else {
+    setStatus("기록 저장 완료", "success");
+  }
 }
 
 async function searchRegistry() {
@@ -2427,6 +2493,7 @@ plateInput?.addEventListener("keydown", (event) => {
 });
 
 plateInput?.addEventListener("input", () => refreshSmsLinks());
+plateInput?.addEventListener("input", updateOcrLearningPanel);
 inspectorInput?.addEventListener("input", () => persistField("inspector", inspectorInput.value.trim()));
 locationInput?.addEventListener("input", () => {
   persistField("location", locationInput.value.trim());

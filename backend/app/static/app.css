@@ -821,6 +821,7 @@ summary:focus-visible {
 }
 
 .note-box,
+.learning-panel,
 .status-board,
 .list-board,
 .ocr-raw,
@@ -837,6 +838,59 @@ summary:focus-visible {
 .admin-upload-box {
   display: grid;
   gap: 12px;
+}
+
+.learning-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.learning-panel strong,
+.learning-panel span {
+  display: block;
+}
+
+.learning-panel strong {
+  margin-top: 2px;
+  font-size: 15px;
+}
+
+.learning-panel #ocr-learning-text {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.learning-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 900;
+  color: #334155;
+  background: #e2e8f0;
+  white-space: nowrap;
+}
+
+.learning-ready .learning-badge {
+  color: #075985;
+  background: #bae6fd;
+}
+
+.learning-accepted .learning-badge {
+  color: #065f46;
+  background: #bbf7d0;
+}
+
+.learning-corrected .learning-badge {
+  color: #7c2d12;
+  background: #fed7aa;
 }
 
 .history-filter-box {

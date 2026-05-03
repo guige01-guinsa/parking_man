@@ -2514,6 +2514,9 @@ async def api_enforcement_submit(
     check = build_check_response(site_code, plate)
     photo_path = save_photo(photo, site_code) if photo else None
     learned_candidates = parse_candidates_json(ocr_candidates)
+    suggested_plate = normalize_plate(ocr_best_plate)
+    feedback_recorded = bool(check.plate and (str(raw_ocr_text or "").strip() or suggested_plate or learned_candidates))
+    feedback_corrected = bool(feedback_recorded and suggested_plate and suggested_plate != check.plate)
 
     with connect() as con:
         cur = con.execute(
@@ -2546,13 +2549,20 @@ async def api_enforcement_submit(
     record_ocr_feedback(
         site_code=site_code,
         raw_ocr_text=raw_ocr_text,
-        suggested_plate=ocr_best_plate,
+        suggested_plate=suggested_plate,
         corrected_plate=check.plate,
         candidates=learned_candidates,
         photo_path=photo_path,
     )
 
-    return dict(row)
+    result = dict(row)
+    result["ocr_learning_feedback"] = {
+        "recorded": feedback_recorded,
+        "corrected": feedback_corrected,
+        "suggested_plate": suggested_plate or None,
+        "corrected_plate": check.plate,
+    }
+    return result
 
 
 @app.get("/api/enforcement/recent")
